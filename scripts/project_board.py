@@ -19,6 +19,8 @@ from . import issue_intake
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".github/project-board.json"
 TEMPLATE_GRACE = timedelta(hours=2)
+#: 这几种身份算维护者：`Source` 按 Issue 作者归类，`Reply` 按谁最后发言判断。
+MAINTAINERS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def gh(*args, payload=None):
@@ -100,6 +102,21 @@ def values(item):
             for value in item.get("fieldValues", {}).get("nodes", []) if value}
 
 
+def reply_state(content):
+    """开放 Issue 里外部用户最后发言、维护者还没接话，是 Needs reply；维护者回过之后是 Replied。
+
+    机器人的发言（模板提醒等）不算谁说了话。只有维护者自己在说的 Issue 不归任何一组。
+    """
+    if content["__typename"] != "Issue" or content["state"] != "OPEN":
+        return ""
+    speakers = [content] + content.get("comments", {}).get("nodes", [])
+    maintainer = [node.get("authorAssociation") in MAINTAINERS for node in speakers
+                  if (node.get("author") or {}).get("__typename") != "Bot"]
+    if all(maintainer):
+        return ""
+    return "Replied" if maintainer[-1] else "Needs reply"
+
+
 def decision(content, current, linked, published):
     """状态服从关闭原因与验收；交付进度单独呈现。"""
     is_pr = content["__typename"] == "PullRequest"
@@ -132,7 +149,7 @@ def decision(content, current, linked, published):
 
 
 ISSUE_CONTENT = '''__typename id number title url state stateReason closedAt body authorAssociation author{__typename} repository{nameWithOwner}
-labels(first:100){nodes{name}}'''
+labels(first:100){nodes{name}} comments(last:30){nodes{authorAssociation author{__typename}}}'''
 CONTENT = '''__typename ... on DraftIssue{id title} ... on Issue{''' + ISSUE_CONTENT + '''}
 ... on PullRequest{id number title url state merged mergeCommit{oid} body repository{nameWithOwner}
 closingIssuesReferences(first:100){nodes{id number repository{nameWithOwner}}}}'''
@@ -165,13 +182,15 @@ pageInfo{hasNextPage endCursor}}}}''', ("repository", "pullRequests"), owner=own
 
 def issue_links(prs, config):
     linked = {}
+    # 迁移映射里的旧仓库照样认：已转移的 Issue 在旧提交和 PR 里仍写着原来的仓库与编号。
+    allowed = list(config.get("issue_repositories", [config["repository"]]))
+    allowed += sorted({key.rsplit("#", 1)[0] for key in config.get("issue_aliases", {})} - set(allowed))
     for pr in prs:
         if pr["state"] == "CLOSED" and not pr.get("merged"):
             continue
-        allowed = config.get("issue_repositories", [config["repository"]])
         keys = {issue_key(issue) for issue in pr["closingIssuesReferences"]["nodes"]
                 if issue["repository"]["nameWithOwner"] in allowed}
-        keys |= references(pr["body"], config["repository"], config.get("issue_repositories"))
+        keys |= references(pr["body"], config["repository"], allowed)
         for key in {canonical(key, config.get("issue_aliases", {})) for key in keys}:
             linked.setdefault(key, []).append(pr)
     return linked
@@ -183,8 +202,7 @@ def incoming_issues(config):
         owner, name = repository.split("/")
         incoming.extend(connection('''query($owner:String!,$name:String!,$states:[IssueState!],$cursor:String){repository(owner:$owner,name:$name){
 issues(first:100,after:$cursor,states:$states){nodes{''' + ISSUE_CONTENT + '''}pageInfo{hasNextPage endCursor}}}}''',
-                                   ("repository", "issues"), owner=owner, name=name,
-                                   states=None if repository == config.get("planning_repository") else ["OPEN"]))
+                                   ("repository", "issues"), owner=owner, name=name, states=["OPEN"]))
     return incoming
 
 
@@ -256,7 +274,6 @@ def apply_fields(project, item, fields, desired, apply):
         if current.get(field_name, "") == value:
             continue
         field = fields[field_name]
-        update = {"singleSelectOptionId": next(option["id"] for option in field["options"] if option["name"] == value)} if "options" in field else {"text": value}
         changes.append({"repository": content["repository"]["nameWithOwner"], "number": content["number"],
                         "title": content["title"], "field": field_name, "value": value})
         if apply:
@@ -265,6 +282,8 @@ def apply_fields(project, item, fields, desired, apply):
 input:{projectId:$project,itemId:$item,fieldId:$field}){projectV2Item{id}}}''',
                         project=project, item=item["id"], field=field["id"])
                 continue
+            options = {option["name"]: option["id"] for option in field.get("options", [])}
+            update = {"singleSelectOptionId": options[value]} if "options" in field else {"text": value}
             graphql('''mutation($project:ID!,$item:ID!,$field:ID!,$value:ProjectV2FieldValue!){
 updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field,value:$value}){projectV2Item{id}}}''',
                     project=project, item=item["id"], field=field["id"], value=update)
@@ -289,7 +308,9 @@ def reconcile(config, *, apply=False, event=None):
             continue
         desired = delivery_fields(config, content, values(item), linked, releases)
         if "Source" in fields:
-            desired["Source"] = "Maintainer" if content_repo == config.get("planning_repository") else "Community"
+            desired["Source"] = "Maintainer" if content.get("authorAssociation") in MAINTAINERS else "Community"
+        if "Reply" in fields:
+            desired["Reply"] = reply_state(content)
         changes.extend(apply_fields(project, item, fields, desired, apply))
     return changes
 

@@ -10,7 +10,7 @@ description: Peach 收集或汇总用户反馈、代码交付、issue 与 PR、�
 
 ## 反馈收集与汇总
 
-- 来源包括 `peach-mitao` 下全部公开仓库的 issue（含评论与反应；peach-roadmap 等兄弟仓库也有人直接提反馈）、Discussions（全部分类，含评论与回复）、社区 PR、Telegram 反馈群聊和 X 提及与回复，只读其中一处不算收齐；GitGud 只存代码与构建，不收反馈，不必读取；读不到的来源写明「未取得」及原因。Discussions 不在 `gh issue` 与 `gh pr` 的输出里，要用 GraphQL `repository.discussions` 读取。
+- 来源包括 `peach-mitao` 下全部公开仓库的 issue（含评论与反应；peach-site、peach-userscript 等兄弟仓库也有人直接提反馈）、Discussions（全部分类，含评论与回复）、社区 PR、Telegram 反馈群聊和 X 提及与回复，只读其中一处不算收齐；GitGud 只存代码与构建，不收反馈，不必读取；读不到的来源写明「未取得」及原因。Discussions 不在 `gh issue` 与 `gh pr` 的输出里，要用 GraphQL `repository.discussions` 读取。
 - 「汇总」指一份带优先级和修复批次的总表，不是逐条摘要。每条都要判断：本地是否已修复、属于需求还是缺陷、轻重缓急、马上修还是先讨论、适合放在哪个版本、关联 PR 能否直接合。
 - 已修复与否，逐条对照 `CHANGELOG.md` 的已发布版本和「未发布」段、主线提交与当前代码；没核实的写「未核实」，不凭 issue 开闭状态推断。建单日期晚于修复版本时，要先确认报告者的版本。
 - 报告之间可能互相包含，要按问题合并，不能只按编号去重。写明报告人数、编号、关联的社区 PR 和还缺的复现信息。

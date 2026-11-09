@@ -349,7 +349,7 @@ Windows 复用 FFmpeg 的 D3D11VA 解码与 `h264_amf`、`h264_qsv` 编码，沿
 
 ## GitHub 项目看板
 
-用户反馈归属应用仓库 `peach-mitao/peach`，维护者项目任务归属 `peach-mitao/peach-roadmap`，共同使用一个公开 Project。集中在应用仓库处理 PR、主线与发布事件，每小时同步两仓 Issue，不逐次响应 Issue 的编辑、标签与开闭事件，凭据仅保留在应用仓库。应用仓库的新 Issue 复用 `issue_intake.verdict` 的模板准入判定；已有条目因待补模板关闭时，以 GitHub `closedAt` 为起点保留 2 小时修改窗口，再按当前状态同步。Issue 关联使用仓库名与编号，迁移映射兼容已存在的关联行；交付版本始终按应用仓库的主线提交和发布制品核验。
+用户反馈和维护者任务都在应用仓库 `peach-mitao/peach`，共用一个公开 Project；原规划仓库已归档，旧编号由迁移映射接到转移后的 Issue。集中在应用仓库处理 PR、主线与发布事件，每小时同步 Issue，不逐次响应 Issue 的编辑、标签与开闭事件，凭据仅保留在应用仓库。应用仓库的新 Issue 复用 `issue_intake.verdict` 的模板准入判定；已有条目因待补模板关闭时，以 GitHub `closedAt` 为起点保留 2 小时修改窗口，再按当前状态同步。Issue 关联使用仓库名与编号，迁移映射兼容已存在的关联行；交付版本始终按应用仓库的主线提交和发布制品核验。
 
 看板同步复用 GitHub CLI 的已登录认证、GraphQL Projects API 和 Git 的提交祖先校验；不新增 Python 依赖。官方 [Projects Actions 自动化](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/automating-projects-using-actions)支持独立项目凭据，仓库默认令牌不能写组织 Project。项目原生状态工作流没有发布标签与制品归属判定；通用自动加卡 Action 也不覆盖验收和发布的分别记录，因此由 `scripts/project_board.py` 保留 Peach 的状态规则，传输与认证交给系统已安装的 `gh`。运行依赖是官方维护、MIT 许可的 GitHub CLI 和 GPL-2.0 Git，使用 GitHub 托管 runner 内置版本；本机只读 GraphQL 与标签祖先验证后再应用。无生产服务、ledger 或媒体写入。
 
