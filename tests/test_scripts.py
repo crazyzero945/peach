@@ -68,19 +68,19 @@ class ProjectBoardTests(unittest.TestCase):
     def test_待补模板关闭两小时内不移动随后补齐保持原位置(self):
         issue = self.issue(state="CLOSED", stateReason="NOT_PLANNED", closedAt="2026-11-06T02:00:00Z",
                            labels={"nodes": [{"name": "status:needs-template"}]})
-        current = {"Status": "待评估"}
-        for hour, minute, expected in ((2, 0, "待评估"), (3, 59, "待评估"), (4, 0, "已取消")):
+        current = {"Status": "Needs triage"}
+        for hour, minute, expected in ((2, 0, "Needs triage"), (3, 59, "Needs triage"), (4, 0, "Canceled")):
             with self.subTest(hour=hour, minute=minute):
                 with mock.patch.object(self.script, "datetime") as clock:
                     clock.now.return_value = datetime(2026, 11, 6, hour, minute, tzinfo=timezone.utc)
                     clock.fromisoformat.side_effect = datetime.fromisoformat
                     self.assertEqual(self.script.decision(issue, current, [], None)["Status"], expected)
         reopened = {**issue, "state": "OPEN", "closedAt": None, "labels": {"nodes": []}}
-        self.assertEqual(self.script.decision(reopened, current, [], None)["Status"], "待评估")
+        self.assertEqual(self.script.decision(reopened, current, [], None)["Status"], "Needs triage")
 
     def test_普通关闭不等待补模板缓冲(self):
         issue = self.issue(state="CLOSED", stateReason="NOT_PLANNED", closedAt="2026-11-06T02:00:00Z")
-        self.assertEqual(self.script.decision(issue, {"Status": "待评估"}, [], None)["Status"], "已取消")
+        self.assertEqual(self.script.decision(issue, {"Status": "Needs triage"}, [], None)["Status"], "Canceled")
 
     def test_看板新条目先按模板校验并保留维护者豁免(self):
         invalid = self.issue(id="invalid", number=444, body="nas中docker无法自动更新", issueType={"name": "Feature"})
@@ -98,11 +98,11 @@ class ProjectBoardTests(unittest.TestCase):
     def test_整体同步在缓冲期不写状态到期只移动一次(self):
         issue = self.issue(id="issue", number=444, title="更新失败", state="CLOSED", stateReason="NOT_PLANNED",
                            closedAt="2026-11-06T02:00:00Z", labels={"nodes": [{"name": "status:needs-template"}]})
-        current = {"Status": "待评估", "交付进度": "未关联实现"}
+        current = {"Status": "Needs triage", "Delivery": "No linked work"}
         item = {"id": "item", "content": issue, "isArchived": False}
-        fields = {name: {"id": name} for name in ("发布版本", "发布说明", "实现关联")}
-        fields["Status"] = {"id": "Status", "options": [{"id": name, "name": name} for name in ("待评估", "已取消")]}
-        fields["交付进度"] = {"id": "交付进度", "options": [{"id": "未关联实现", "name": "未关联实现"}]}
+        fields = {name: {"id": name} for name in ("Release", "Release notes", "Implementation")}
+        fields["Status"] = {"id": "Status", "options": [{"id": name, "name": name} for name in ("Needs triage", "Canceled")]}
+        fields["Delivery"] = {"id": "Delivery", "options": [{"id": "No linked work", "name": "No linked work"}]}
         config = {"repository": "peach-mitao/peach", "project_id": "public"}
         def update(query, **variables):
             current[variables["field"]] = variables["value"]["singleSelectOptionId"]
@@ -123,29 +123,29 @@ class ProjectBoardTests(unittest.TestCase):
             issue.update(state="CLOSED", closedAt="2026-11-06T02:00:00Z",
                          labels={"nodes": [{"name": "status:needs-template"}]})
             changes = self.script.reconcile(config, apply=True)
-            self.assertEqual([(change["field"], change["value"]) for change in changes], [("Status", "已取消")])
+            self.assertEqual([(change["field"], change["value"]) for change in changes], [("Status", "Canceled")])
             self.assertEqual(self.script.reconcile(config, apply=True), [])
             api.assert_called_once()
 
     def test_merge_and_publication_keep_open_issue_waiting_for_acceptance(self):
         release = {"tag_name": "v1.2.0", "html_url": "https://example.test/release"}
-        result = self.script.decision(self.issue(), {"Status": "进行中"}, [{"merged": True}], release)
-        self.assertEqual(result["Status"], "待验证")
-        self.assertEqual(result["交付进度"], "已发布")
-        self.assertEqual(result["发布版本"], "v1.2.0")
+        result = self.script.decision(self.issue(), {"Status": "In progress"}, [{"merged": True}], release)
+        self.assertEqual(result["Status"], "Needs verification")
+        self.assertEqual(result["Delivery"], "Released")
+        self.assertEqual(result["Release"], "v1.2.0")
 
     def test_closed_not_planned_is_cancelled_and_reopened_returns_to_queue(self):
         result = self.script.decision(self.issue(state="CLOSED", stateReason="NOT_PLANNED"), {}, [], None)
-        self.assertEqual(result["Status"], "已取消")
-        result = self.script.decision(self.issue(), {"Status": "已取消"}, [], None)
-        self.assertEqual(result["Status"], "待安排")
+        self.assertEqual(result["Status"], "Canceled")
+        result = self.script.decision(self.issue(), {"Status": "Canceled"}, [], None)
+        self.assertEqual(result["Status"], "Backlog")
 
     def test_manual_priority_and_queue_are_not_replaced_by_unrelated_activity(self):
-        result = self.script.decision(self.issue(), {"Status": "待安排", "Priority": "P1"}, [], None)
-        self.assertEqual(result["Status"], "待安排")
+        result = self.script.decision(self.issue(), {"Status": "Backlog", "Priority": "P1"}, [], None)
+        self.assertEqual(result["Status"], "Backlog")
         self.assertNotIn("Priority", result)
         waiting = self.issue(labels={"nodes": [{"name": "status:needs-info"}]})
-        self.assertEqual(self.script.decision(waiting, {}, [{"merged": True}], None)["Status"], "待评估")
+        self.assertEqual(self.script.decision(waiting, {}, [{"merged": True}], None)["Status"], "Needs triage")
 
     def test_reference_lines_exclude_other_repositories_and_casual_mentions(self):
         body = "参考 #64 的讨论\nRefs #65, peach-mitao/peach#66, other/repo#67\nCloses #68"
@@ -165,17 +165,17 @@ class ProjectBoardTests(unittest.TestCase):
         config["implementation_commits"] = {f"{main}#1": ["b" * 40]}
         with mock.patch.object(self.script, "ancestor") as ancestry:
             untouched = self.script.delivery_fields(config, self.issue(number=1, repository={"nameWithOwner": planning}), {}, {}, [])
-        self.assertEqual(untouched["交付进度"], "未关联实现")
+        self.assertEqual(untouched["Delivery"], "No linked work")
         ancestry.assert_not_called()
         release = {"tag_name": "v1.0", "html_url": "https://example.test/v1.0"}
         with mock.patch.object(self.script, "ancestor", return_value=True) as ancestry:
             result = self.script.delivery_fields(config, self.issue(number=1, repository={"nameWithOwner": planning}), {}, linked, [release])
-        self.assertEqual(result["发布版本"], "v1.0")
-        self.assertEqual(result["实现关联"], pr["url"])
+        self.assertEqual(result["Release"], "v1.0")
+        self.assertEqual(result["Implementation"], pr["url"])
         self.assertTrue(all(call.args[0] == "a" * 40 for call in ancestry.call_args_list))
         with mock.patch.object(self.script, "ancestor") as ancestry:
             result = self.script.delivery_fields(config, self.issue(number=1), {}, linked, [])
-        self.assertEqual(result["交付进度"], "已合入待发布")
+        self.assertEqual(result["Delivery"], "Merged")
         ancestry.assert_called_once_with("b" * 40, "origin/master")
 
     def test_planning_poll_includes_closed_issues_and_alias_cycles_fail(self):
@@ -192,16 +192,16 @@ class ProjectBoardTests(unittest.TestCase):
 
     def test_pr_closure_is_distinct_from_merge(self):
         pr = {"__typename": "PullRequest", "state": "CLOSED", "merged": False}
-        self.assertEqual(self.script.decision(pr, {}, [], None)["Status"], "已关闭未合入")
+        self.assertEqual(self.script.decision(pr, {}, [], None)["Status"], "Closed unmerged")
         pr["merged"] = True
-        self.assertEqual(self.script.decision(pr, {}, [], None)["交付进度"], "已合入待发布")
+        self.assertEqual(self.script.decision(pr, {}, [], None)["Delivery"], "Merged")
 
     def test_reconcile_uses_published_assets_and_keeps_archived_items_untouched(self):
         commit = "a" * 40
-        fields = [{"id": name, "name": name} for name in ("发布版本", "发布说明", "实现关联")]
-        fields += [{"id": "status", "name": "Status", "options": [{"id": "verify", "name": "待验证"}]},
-                   {"id": "delivery", "name": "交付进度", "options": [{"id": "published", "name": "已发布"}]},
-                   {"id": "source", "name": "来源", "options": [{"id": "feedback", "name": "用户反馈"}, {"id": "plan", "name": "维护者待办"}]}]
+        fields = [{"id": name, "name": name} for name in ("Release", "Release notes", "Implementation")]
+        fields += [{"id": "status", "name": "Status", "options": [{"id": "verify", "name": "Needs verification"}]},
+                   {"id": "delivery", "name": "Delivery", "options": [{"id": "published", "name": "Released"}]},
+                   {"id": "source", "name": "Source", "options": [{"id": "feedback", "name": "Community"}, {"id": "plan", "name": "Maintainer"}]}]
         issue = self.issue(id="issue", number=65, title="历史导入", author={"login": "visitor"}, url="https://github.com/peach-mitao/peach/issues/65")
         item = {"id": "item", "content": issue, "isArchived": False, "fieldValues": {"nodes": []}}
         archived = {**item, "id": "archive", "isArchived": True, "content": {**issue, "id": "old", "number": 90}}
@@ -236,11 +236,11 @@ class ProjectBoardTests(unittest.TestCase):
                                                 "implementation_commits": {"peach-mitao/peach#65": [commit]}}, apply=False)
         self.assertEqual({change["number"] for change in changes}, {65})
         actual = {change["field"]: change["value"] for change in changes}
-        self.assertEqual(actual["发布版本"], "v0.43.0")
-        self.assertEqual(actual["Status"], "待验证")
-        self.assertEqual(actual["来源"], "用户反馈")
-        self.assertEqual(next(change["value"] for change in maintained if change["field"]=="来源"), "维护者待办")
-        self.assertTrue(actual["实现关联"].endswith(commit))
+        self.assertEqual(actual["Release"], "v0.43.0")
+        self.assertEqual(actual["Status"], "Needs verification")
+        self.assertEqual(actual["Source"], "Community")
+        self.assertEqual(next(change["value"] for change in maintained if change["field"]=="Source"), "Maintainer")
+        self.assertTrue(actual["Implementation"].endswith(commit))
 
     def test_ancestor_uses_actual_commit_graph_and_rejects_unmerged_commit(self):
         with tempfile.TemporaryDirectory() as temporary:

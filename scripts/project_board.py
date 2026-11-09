@@ -105,29 +105,29 @@ def decision(content, current, linked, published):
     is_pr = content["__typename"] == "PullRequest"
     merged = bool(content.get("merged")) if is_pr else any(pr.get("merged") for pr in linked)
     labels = {label["name"] for label in content.get("labels", {}).get("nodes", [])}
-    status = current.get("Status", "待评估")
+    status = current.get("Status", "Needs triage")
     if is_pr:
-        status = "已完成" if merged else ("已关闭未合入" if content["state"] == "CLOSED" else "进行中")
+        status = "Done" if merged else ("Closed unmerged" if content["state"] == "CLOSED" else "In progress")
     elif content["state"] == "CLOSED" and issue_intake.LABEL in labels and \
             datetime.now(timezone.utc) - datetime.fromisoformat(content["closedAt"]) < TEMPLATE_GRACE:
-        status = current.get("Status", "待评估")
+        status = current.get("Status", "Needs triage")
     elif content["state"] == "CLOSED":
-        status = "已取消" if content.get("stateReason") == "NOT_PLANNED" else "已完成"
+        status = "Canceled" if content.get("stateReason") == "NOT_PLANNED" else "Done"
     elif "status:needs-verification" in labels:
-        status = "待验证"
+        status = "Needs verification"
     elif "status:needs-info" in labels:
-        status = "待评估"
+        status = "Needs triage"
     elif merged:
-        status = "待验证"
+        status = "Needs verification"
     elif linked:
-        status = "进行中"
-    elif status in {"已完成", "已取消"}:
-        status = "待安排"
-    delivery = "已发布" if published else ("已合入待发布" if merged else (
-        "尚未合入" if linked or is_pr else "未关联实现"))
-    result = {"Status": status, "交付进度": delivery, "发布版本": "", "发布说明": "", "实现关联": ""}
+        status = "In progress"
+    elif status in {"Done", "Canceled"}:
+        status = "Backlog"
+    delivery = "Released" if published else ("Merged" if merged else (
+        "Not merged" if linked or is_pr else "No linked work"))
+    result = {"Status": status, "Delivery": delivery, "Release": "", "Release notes": "", "Implementation": ""}
     if published:
-        result.update({"发布版本": published["tag_name"], "发布说明": published["html_url"]})
+        result.update({"Release": published["tag_name"], "Release notes": published["html_url"]})
     return result
 
 
@@ -145,7 +145,7 @@ def read_project(project):
 fields(first:100){nodes{... on ProjectV2Field{id name dataType}
 ... on ProjectV2SingleSelectField{id name options{id name}}}}}}}''', id=project)["node"]["fields"]["nodes"]
     fields = {field["name"]: field for field in fields if "name" in field}
-    for required in ("Status", "交付进度", "发布版本", "发布说明", "实现关联"):
+    for required in ("Status", "Delivery", "Release", "Release notes", "Implementation"):
         if required not in fields:
             raise ValueError(f"看板缺少字段：{required}")
     items = connection('''query($id:ID!,$cursor:String){node(id:$id){... on ProjectV2{
@@ -243,9 +243,9 @@ def delivery_fields(config, content, current, linked, releases):
     desired = decision(content, current, associated, published)
     urls = [pr["url"] for pr in associated if pr.get("url")]
     if urls:
-        desired["实现关联"] = "\n".join(urls)
+        desired["Implementation"] = "\n".join(urls)
     elif integrated:
-        desired["实现关联"] = "\n".join(f"https://github.com/{repository}/commit/{commit}" for commit in integrated)
+        desired["Implementation"] = "\n".join(f"https://github.com/{repository}/commit/{commit}" for commit in integrated)
     return desired
 
 
@@ -288,8 +288,8 @@ def reconcile(config, *, apply=False, event=None):
         if content_repo not in config.get("issue_repositories", [repository]):
             continue
         desired = delivery_fields(config, content, values(item), linked, releases)
-        if "来源" in fields:
-            desired["来源"] = "维护者待办" if content_repo == config.get("planning_repository") else "用户反馈"
+        if "Source" in fields:
+            desired["Source"] = "Maintainer" if content_repo == config.get("planning_repository") else "Community"
         changes.extend(apply_fields(project, item, fields, desired, apply))
     return changes
 
