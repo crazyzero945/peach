@@ -33,13 +33,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
+      # 组织看板不接受仓库默认令牌；peach-board App 只有看板写权限与本仓库只读权限，令牌一小时过期。
+      - id: board-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.PROJECT_BOARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROJECT_BOARD_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: peach
       - name: 同步 Issue、PR、已发布版本与看板
         env:
-          GH_TOKEN: ${{ secrets.PROJECT_BOARD_TOKEN }}
+          GH_TOKEN: ${{ steps.board-token.outputs.token }}
           PYTHONUTF8: '1'
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo '缺少 PROJECT_BOARD_TOKEN：需要 repo 与 project 权限的项目自动化凭据。' >&2
-            exit 1
-          fi
-          python scripts/project_board.py --apply --event "$GITHUB_EVENT_PATH"
+        run: python scripts/project_board.py --apply --event "$GITHUB_EVENT_PATH"
