@@ -45,7 +45,7 @@ services:
   # 可选：配置页「一键更新」（docs/DOCKER.md、ADR-0140）。`docker compose --profile watchtower up -d`
   # 才会起它。它挂着 Docker socket，等于宿主 root；只开要令牌的更新接口，不发布端口，不定时轮询。
   watchtower:
-    image: nickfedor/watchtower:1.23.2
+    image: nickfedor/watchtower:1.24.0
     profiles: [watchtower]
     restart: unless-stopped
     depends_on:
