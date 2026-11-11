@@ -261,6 +261,32 @@ select{min-width:112px;cursor:pointer}
 .demo-banner button:hover{opacity:1}
 .demo-canvas{width:100%;aspect-ratio:16/9;display:block;background:#0d1117;border-radius:8px;cursor:pointer}
 @media(max-width:640px){.demo-banner-in{flex-wrap:wrap;padding:9px 14px}}
+/* 在线刮削 */
+.drawer-actions{flex-wrap:wrap}
+.src-badge{display:inline-flex;align-items:center;gap:3px;background:rgba(47,158,109,.15);color:var(--green);border:1px solid rgba(47,158,109,.32);border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700;letter-spacing:.4px}
+.scrape-progress{height:7px;border-radius:6px;background:var(--surface3);overflow:hidden;margin:12px 0 8px}
+.scrape-progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .35s}
+.scrape-stat{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:8px 0 10px}
+.scrape-stat b{color:var(--text);font-size:15px;margin-right:3px}
+.scrape-log{max-height:140px;overflow:auto;font-size:12px;border:1px solid var(--border);border-radius:9px;padding:8px 11px;background:var(--surface2)}
+.scrape-log div{padding:3px 0;border-bottom:1px dashed var(--border)}
+.scrape-log div:last-child{border:0}
+.scrape-log .bad{color:var(--accent)}
+.scrape-log .good{color:var(--green)}
+.scrape-note{font-size:12px;color:var(--muted);line-height:1.7;margin:10px 0 0}
+.scrape-inline{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0}
+.scrape-inline input[type=checkbox]{accent-color:var(--accent)}
+.cand-list{max-height:330px;overflow:auto;margin-top:12px}
+.cand-item{display:flex;align-items:center;gap:11px;padding:10px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--surface)}
+.cand-item:hover{border-color:var(--accent);background:var(--accent-soft)}
+.cand-item .rank{flex:none;width:26px;height:26px;border-radius:7px;background:var(--surface3);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--muted)}
+.cand-item .info{flex:1;min-width:0}
+.cand-item .t{font-weight:600;font-size:14px}
+.cand-item .d{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cand-item .y{flex:none;color:var(--faint);font-size:12px}
+.scrape-meta{font-size:12px;color:var(--muted);line-height:1.9;background:var(--surface2);border-radius:9px;padding:10px 12px;margin-top:8px}
+.scrape-meta a{color:var(--accent);text-decoration:none}
+.scrape-meta a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
@@ -277,6 +303,7 @@ select{min-width:112px;cursor:pointer}
       <span class="kbd">/</span>
     </div>
     <div class="actions">
+      <button class="btn" id="btn-scrape" title="在线元数据刮削"><svg viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 9-12h-7z"/></svg><span>刮削</span></button>
       <button class="btn" id="btn-roots" title="添加媒体目录"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>目录</span></button>
       <button class="btn" id="btn-export" title="导出当前结果为 CSV"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3h16v-3"/></svg><span>导出</span></button>
       <button class="btn primary" id="btn-scan"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg><span>扫描</span></button>
@@ -369,6 +396,14 @@ select{min-width:112px;cursor:pointer}
       <li><b>人工修改永久保留</b>：改过标题、标签、简介的条目，重新扫描只刷新大小和文件时间，不会覆盖你的编辑。</li>
       <li>文件移走或删除只标记为「已丢失」，观看记录、收藏和备注都留着。</li>
     </ul>
+    <h4>在线刮削</h4>
+    <p>点顶部「刮削」→「刮削未完成的」，会从 <b>Wikidata + 维基百科</b> 自动抓取原名、年份、导演、演员、题材、剧情简介与海报，零配置、不需要 API Key。匹配不准时，在影片详情里点「手动匹配」自己挑条目。也可以在刮削面板里填 TMDB / OMDb 的 Key 作为补充源（Key 只存在本机 <code>config.json</code>）。</p>
+    <ul>
+      <li>默认<b>只填空字段</b>，不会覆盖已有的 NFO 资料；勾选「覆盖已有资料」才会替换。</li>
+      <li><b>人工编辑过的标题 / 标签 / 简介永远保留</b>，刮削只补导演、原名、海报这类空缺。</li>
+      <li>海报缓存在 <code>data/posters/</code>，与扫描到的本地封面分开存，重新扫描不会丢；详情里可一键「用回本地封面」。</li>
+      <li>失败的条目会标记出来，可以「重试失败的」，或用手动匹配指定正确条目。</li>
+    </ul>
     <h4>播放</h4>
     <p>点海报上的播放按钮即可在网页里播放，服务支持 HTTP Range，可以任意拖动进度、自动续播。mkv / avi 等浏览器不支持的格式，点「系统播放器」用本机播放器打开。</p>
     <h4>数据在哪</h4>
@@ -392,6 +427,53 @@ select{min-width:112px;cursor:pointer}
 <div class="modal" id="modal-dup">
   <div class="modal-head"><h2>重复文件</h2><button class="btn icon" data-close><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
   <div class="modal-body" id="dup-body"></div>
+</div>
+
+<div class="modal" id="modal-scrape">
+  <div class="modal-head"><h2>在线刮削</h2><button class="btn icon" data-close><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+  <div class="modal-body">
+    <p style="font-size:13px;line-height:1.75;color:var(--muted);margin:0 0 4px">
+      从 <b>Wikidata + 维基百科</b> 抓取标题、原名、年份、导演、演员、题材、剧情与海报，写回本地数据库。
+      默认源<b>零配置、无需 API Key</b>；原始海报缓存到 <code>data/posters/</code>。
+    </p>
+    <div class="section-title">批量刮削</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn primary" id="sc-missing">刮削未完成的</button>
+      <button class="btn" id="sc-failed">重试失败的</button>
+      <button class="btn" id="sc-all">重新刮削全部</button>
+      <button class="btn" id="sc-stop">停止</button>
+    </div>
+    <div class="scrape-inline"><label><input type="checkbox" id="sc-overwrite"> 覆盖已有资料</label>
+      <span>（人工编辑过的标题 / 标签 / 简介仍受保护）</span></div>
+    <div class="scrape-progress" id="sc-progress"><i></i></div>
+    <div class="scrape-stat" id="sc-stat">空闲</div>
+    <div class="scrape-log" id="sc-log"><div>暂无刮削记录</div></div>
+
+    <div class="section-title">可选数据源</div>
+    <div class="field-row">
+      <div class="field"><label>TMDB API Key</label><input id="sc-tmdb" type="password" autocomplete="off" placeholder="留空即只用 Wikidata"></div>
+      <div class="field"><label>OMDb API Key</label><input id="sc-omdb" type="password" autocomplete="off" placeholder="可选，补 IMDb 评分"></div>
+    </div>
+    <div class="scrape-inline"><label><input type="checkbox" id="sc-poster" checked> 下载海报到本地</label>
+      <button class="btn" id="sc-save">保存设置</button></div>
+    <p class="scrape-note">
+      TMDB 字段最全（含评分），但需要自备 API Key，且部分地区网络不通；此时会自动回退到 Wikidata。
+      OMDb 需自备 Key，只用来补评分、简介和海报。两个 Key 只保存在本机 <code>config.json</code>，不会上传。
+      匹配不准时，在影片详情里点「手动匹配」自己挑条目。
+    </p>
+  </div>
+</div>
+
+<div class="modal" id="modal-bind">
+  <div class="modal-head"><h2>手动匹配</h2><button class="btn icon" data-close><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+  <div class="modal-body">
+    <p class="scrape-note" style="margin:0" id="bind-target">选择要绑定的条目</p>
+    <div class="field" style="margin-top:12px"><label>搜索关键词（片名，可带年份）</label>
+      <input type="text" id="bind-q" placeholder="例如 Dune 2021 或 沙丘"></div>
+    <div class="scrape-inline"><button class="btn primary" id="bind-search">搜索候选</button>
+      <label><input type="checkbox" id="bind-force"> 同时覆盖现有资料（含人工编辑）</label></div>
+    <div class="cand-list" id="bind-list"><div class="scrape-note">输入关键词后点「搜索候选」。</div></div>
+  </div>
 </div>
 
 <div class="modal player" id="modal-player">
@@ -486,8 +568,26 @@ let DEMO = DEMO_SEED.map((d,i)=>({
   plot:d.plot, cover:demoPoster(d.title,d.year,d.c1,d.c2), studio:d.studio, actors:d.actors.slice(),
   resolution:d.res, code:d.code, favorite:false, watched:false, progress:0, note:'',
   added_at:'2026-11-11 00:00', last_seen:'2026-11-11 00:00', edited:false, missing:false,
-  size_human:humanSize(d.size), mtime_human:'2026-11-11'
+  size_human:humanSize(d.size), mtime_human:'2026-11-11',
+  original_title:'', director:'', runtime:null, imdb:'', poster:'', local_cover:'',
+  scraped_source:'', scraped_at:'', external_id:'', external_url:'',
+  scrape_status:'', scraped:false
 }));
+/* 演示数据里预置几部「已刮削」的样子，静态预览也能看到完整界面 */
+const DEMO_SCRAPED = {
+  1:{original_title:'Dune', director:'丹尼斯·维伦纽瓦', runtime:155, imdb:'tt1160419', external_id:'Q60834962'},
+  2:{original_title:'Arrival', director:'丹尼斯·维伦纽瓦', runtime:116, imdb:'tt2543164', external_id:'Q20382729'},
+  3:{original_title:'Blade Runner 2049', director:'丹尼斯·维伦纽瓦', runtime:164, imdb:'tt1856101', external_id:'Q21500755'},
+  4:{original_title:'Interstellar', director:'克里斯托弗·诺兰', runtime:169, imdb:'tt0816692', external_id:'Q13417189'},
+  5:{original_title:'Perfect Days', director:'维姆·文德斯', runtime:124, imdb:'tt27503384', external_id:'Q117663112'},
+  6:{original_title:'The Grand Budapest Hotel', director:'韦斯·安德森', runtime:99, imdb:'tt2278388', external_id:'Q1433748'}
+};
+DEMO.forEach(i=>{
+  const m=DEMO_SCRAPED[i.id]; if(!m) return;
+  Object.assign(i, m, {scraped_source:'wikidata', scraped_at:'2026-11-12 00:50',
+    scrape_status:'ok', scraped:true,
+    external_url:'https://www.wikidata.org/wiki/'+m.external_id});
+});
 
 function demoCount(fn){
   const m=new Map();
@@ -557,6 +657,15 @@ async function offlineApi(path, options={}){
   if(route==='/api/roots') return {roots:[DEMO_ROOT]};
   if(route==='/api/scan/status') return {running:false,scanned:0,added:0,updated:0,missing:0,error:''};
   if(route==='/api/scan'){ demoHint(); return {started:false}; }
+  if(route==='/api/scrape/config') return {provider:'wikidata',tmdb_key:'',omdb_key:'',
+    language:'zh-CN',download_posters:true,overwrite:false,
+    tmdb_configured:false,omdb_configured:false};
+  if(route==='/api/scrape/status') return {running:false,total:0,done:0,ok:0,failed:0,
+    current:'',current_title:'',last_error:'',cancel:false,
+    started_at:null,finished_at:null,results:[]};
+  if(route==='/api/scrape/search') return {candidates:[],total:0,
+    error:'演示模式不联网；启动 start.bat 后可搜索真实数据源'};
+  if(route==='/api/scrape'){ demoHint(); return {started:false}; }
   if(route==='/api/duplicates') return demoDuplicates();
   if(route==='/api/export') return {ok:true};
   if((m=route.match(/^\/api\/items\/(\d+)$/))){
@@ -676,6 +785,7 @@ function badges(item){
   if(item.missing) out.push('<span class="badge warn">已丢失</span>');
   else if(item.resolution) out.push(`<span class="badge">${esc(item.resolution)}</span>`);
   if(item.rating) out.push(`<span class="badge">★ ${esc(item.rating)}</span>`);
+  if(item.scraped) out.push(`<span class="src-badge" title="已刮削：${esc(item.scraped_source||'')}">${esc(srcLabel(item.scraped_source))}</span>`);
   return out.join('');
 }
 function renderGrid(data){
@@ -771,6 +881,9 @@ async function openDetail(id){
           <span>编号</span><b>${esc(item.code||'—')}</b>
           <span>厂牌</span><b>${esc(item.studio||'—')}</b>
           <span>演员</span><b>${esc(actors||'—')}</b>
+          <span>原名</span><b>${esc(item.original_title||'—')}</b>
+          <span>导演</span><b>${esc(item.director||'—')}</b>
+          <span>时长</span><b>${item.runtime?item.runtime+' 分钟':'—'}</b>
           <span>修改</span><b>${esc(item.mtime_human||'—')}</b>
         </div>
       </div>
@@ -778,6 +891,8 @@ async function openDetail(id){
     <div class="drawer-actions">
       <button class="btn primary" id="d-play">播放</button>
       <button class="btn" id="d-external">系统播放器</button>
+      <button class="btn" id="d-scrape">重新刮削</button>
+      <button class="btn" id="d-bind">手动匹配</button>
       <button class="toggle ${item.favorite?'on':''}" id="d-fav">${ICONS.star} 收藏</button>
       <button class="toggle ${item.watched?'on':''}" id="d-watched">${ICONS.eye} 已看</button>
     </div>
@@ -793,6 +908,16 @@ async function openDetail(id){
     <div class="field"><label>简介</label><textarea id="e-plot">${esc(item.plot)}</textarea></div>
     <div class="field"><label>私人备注</label><textarea id="e-note">${esc(item.note)}</textarea></div>
     <button class="btn primary" id="d-save">保存修改</button>
+    <div class="section-title">在线刮削</div>
+    <div class="scrape-meta">${item.scraped_at
+      ? `来源 <b>${esc(srcLabel(item.scraped_source))}</b> · ${esc(item.scraped_at)}`
+        + `${item.imdb?' · IMDb '+esc(item.imdb):''}`
+        + `${item.external_url?` · <a href="${esc(item.external_url)}" target="_blank" rel="noopener">查看源条目 ↗</a>`:''}`
+        + `${item.poster?' · <button class="link-btn" id="d-uncover">用回本地封面</button>':''}`
+        + `${item.guarded?' · 人工编辑已保护':''}`
+      : '尚未刮削 · 点「重新刮削」自动匹配，或「手动匹配」自己指定条目。'}
+      ${item.scrape_status==='failed'?'<br><span style="color:var(--accent)">上次刮削失败，可重试或用手动匹配</span>':''}
+    </div>
     <div class="section-title">文件信息</div>
     <div class="kv" style="grid-template-columns:66px 1fr">
       <span>路径</span><b>${esc(item.path)}</b>
@@ -813,6 +938,35 @@ async function openDetail(id){
     };
     try{ CURRENT = await patch(id,payload); toast('已保存，重新扫描也不会覆盖'); loadItems(); refreshMeta(); }
     catch(err){ toast(err.message); }
+  };
+  $('#d-scrape').onclick = async ()=>{
+    if(OFFLINE){ demoHint(); return; }
+    toast('正在联网刮削，请稍候…');
+    try{
+      const r = await api('/api/scrape/'+id,{method:'POST',body:'{}'});
+      toast('刮削完成：'+(r.title||'')+(r.guarded?' · 人工编辑已保护':''));
+      refreshMeta(); loadItems();
+      CURRENT = await api('/api/items/'+id);
+      openDetail(id);
+    }catch(err){ toast(err.message); }
+  };
+  $('#d-bind').onclick = ()=>{
+    if(OFFLINE){ demoHint(); return; }
+    BIND_ID = id;
+    $('#bind-target').innerHTML = `为「<b>${esc(item.title)}</b>」挑一个匹配条目，选完立即刮削写入。`;
+    $('#bind-q').value = item.original_title
+      || String(item.filename||'').replace(/\.[^.]+$/,'').replace(/[._]+/g,' ');
+    $('#bind-list').innerHTML = '<div class="scrape-note">点「搜索候选」开始。</div>';
+    openModal('#modal-bind');
+  };
+  const uncover = $('#d-uncover');
+  if(uncover) uncover.onclick = async ()=>{
+    try{
+      await api('/api/scrape/'+id+'/reset-poster',{method:'POST',body:'{}'});
+      toast('已切回本地封面');
+      closeAll(); refreshAll();
+      CURRENT = await api('/api/items/'+id); openDetail(id);
+    }catch(err){ toast(err.message); }
   };
   showOverlay(); $('#drawer').classList.add('show');
 }
@@ -970,6 +1124,112 @@ $('#btn-export').onclick = ()=>{
   toast('正在导出 CSV');
 };
 
+/* ---------------- 在线刮削 ---------------- */
+let SCRAPE_CFG = null, scrapeWasRunning = false, BIND_ID = null;
+const SRC_LABEL = {wikidata:'Wikidata', tmdb:'TMDB', omdb:'OMDb'};
+function srcLabel(s){ return SRC_LABEL[s] || (s || 'META'); }
+
+async function loadScrapeConfig(){
+  try{ SCRAPE_CFG = await api('/api/scrape/config'); }
+  catch(e){ SCRAPE_CFG = {}; }
+  if($('#sc-tmdb')) $('#sc-tmdb').value = SCRAPE_CFG.tmdb_key || '';
+  if($('#sc-omdb')) $('#sc-omdb').value = SCRAPE_CFG.omdb_key || '';
+  if($('#sc-poster')) $('#sc-poster').checked = SCRAPE_CFG.download_posters !== false;
+  if($('#sc-overwrite')) $('#sc-overwrite').checked = !!SCRAPE_CFG.overwrite;
+}
+function renderScrapeStatus(s){
+  const pct = s.total ? Math.min(100, Math.round((s.done||0)/s.total*100)) : 0;
+  $('#sc-progress').firstElementChild.style.width = pct+'%';
+  if(s.running){
+    $('#sc-stat').innerHTML = `<span><b>${s.done||0}</b>/${s.total||0} 已处理</span>`
+      + `<span><b>${s.ok||0}</b> 成功</span><span><b>${s.failed||0}</b> 失败</span>`
+      + `<span>当前：${esc(s.current_title||'准备中…')}</span>`;
+  }else if(s.total){
+    $('#sc-stat').innerHTML = `<span>上次任务 <b>${s.done||0}</b>/${s.total}</span>`
+      + `<span><b>${s.ok||0}</b> 成功</span><span><b>${s.failed||0}</b> 失败</span>`
+      + `<span>${esc(s.finished_at||'')}</span>`;
+  }else{
+    $('#sc-stat').textContent = '空闲 · 尚未运行过刮削';
+  }
+  const rows = (s.results||[]).slice(-20).reverse();
+  $('#sc-log').innerHTML = rows.length
+    ? rows.map(r => r.ok
+        ? `<div class="good">✓ #${r.id} ${esc(r.title||'')} · ${esc(srcLabel(r.source))}</div>`
+        : `<div class="bad">✗ #${r.id} ${esc(String(r.error||'失败').slice(0,72))}</div>`).join('')
+    : '<div>暂无刮削记录</div>';
+  if(s.running) scrapeWasRunning = true;
+  else if(scrapeWasRunning){
+    scrapeWasRunning = false;
+    refreshAll();
+    toast(`刮削结束：成功 ${s.ok||0}，失败 ${s.failed||0}`);
+  }
+}
+function pollScrape(){
+  api('/api/scrape/status').then(s=>{
+    renderScrapeStatus(s);
+    setTimeout(pollScrape, s.running ? 800 : 3500);
+  }).catch(()=>setTimeout(pollScrape,4000));
+}
+async function startScrapeJob(mode){
+  if(OFFLINE){ demoHint(); return; }
+  try{
+    const r = await api('/api/scrape',{method:'POST',body:JSON.stringify({
+      mode, overwrite:!!($('#sc-overwrite')||{}).checked})});
+    toast(r.message || (r.started?'已开始':'未能开始'));
+    if(!r.started) return;
+    scrapeWasRunning = false;
+    renderScrapeStatus(await api('/api/scrape/status'));
+  }catch(err){ toast(err.message); }
+}
+$('#btn-scrape').onclick = ()=>{
+  if(OFFLINE){ demoHint(); return; }
+  loadScrapeConfig(); openModal('#modal-scrape');
+};
+$('#sc-missing').onclick = ()=>startScrapeJob('missing');
+$('#sc-failed').onclick  = ()=>startScrapeJob('failed');
+$('#sc-all').onclick     = ()=>startScrapeJob('all');
+$('#sc-stop').onclick = async ()=>{
+  try{ const r = await api('/api/scrape/stop',{method:'POST',body:'{}'}); toast(r.message||'已请求停止'); }
+  catch(err){ toast(err.message); }
+};
+$('#sc-save').onclick = async ()=>{
+  if(OFFLINE){ demoHint(); return; }
+  try{
+    SCRAPE_CFG = await api('/api/scrape/config',{method:'POST',body:JSON.stringify({
+      tmdb_key:$('#sc-tmdb').value.trim(), omdb_key:$('#sc-omdb').value.trim(),
+      download_posters:$('#sc-poster').checked, overwrite:$('#sc-overwrite').checked,
+      provider:'wikidata'})});
+    toast('刮削设置已保存到本机');
+  }catch(err){ toast(err.message); }
+};
+$('#bind-search').onclick = async ()=>{
+  if(OFFLINE){ demoHint(); return; }
+  const q = $('#bind-q').value.trim();
+  if(!q) return toast('请输入关键词');
+  $('#bind-list').innerHTML = '<div class="scrape-note">正在搜索…</div>';
+  try{
+    const d = await api('/api/scrape/search?q='+encodeURIComponent(q));
+    const list = d.candidates || [];
+    $('#bind-list').innerHTML = list.length
+      ? list.map((c,i)=>`<div class="cand-item" data-qid="${esc(c.qid)}">
+          <div class="rank">${i+1}</div>
+          <div class="info"><div class="t">${esc(c.title||c.qid)}</div>
+            <div class="d">${esc(c.description||'')}${c.original_title&&c.original_title!==c.title?' · '+esc(c.original_title):''}</div></div>
+          <div class="y">${c.year||'—'}</div></div>`).join('')
+      : `<div class="scrape-note">${esc(d.error||'没有找到候选，换个关键词试试')}</div>`;
+    $('#bind-list').querySelectorAll('[data-qid]').forEach(el=>el.onclick = async ()=>{
+      el.style.opacity = '.5';
+      try{
+        const r = await api('/api/scrape/bind',{method:'POST',body:JSON.stringify({
+          id:BIND_ID, qid:el.dataset.qid, force:$('#bind-force').checked})});
+        toast('已绑定并刮削：'+(r.title||''));
+        closeAll(); refreshAll();
+        if(BIND_ID){ CURRENT = await api('/api/items/'+BIND_ID); openDetail(BIND_ID); }
+      }catch(err){ el.style.opacity='1'; toast(err.message); }
+    });
+  }catch(err){ $('#bind-list').innerHTML = '<div class="scrape-note">'+esc(err.message)+'</div>'; }
+};
+
 /* ---------------- 扫描状态 ---------------- */
 function pollScan(){
   api('/api/scan/status').then(s=>{
@@ -1065,7 +1325,7 @@ $('#f-pagesize').value = String(state.pageSize);
   await detectBackend();
   if(OFFLINE) showDemoBanner();
   refreshAll();
-  if(!OFFLINE) pollScan();
+  if(!OFFLINE){ pollScan(); pollScrape(); loadScrapeConfig(); }
 })();
 </script>
 </body>

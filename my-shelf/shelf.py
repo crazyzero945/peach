@@ -33,6 +33,9 @@ import time
 import traceback
 import webbrowser
 import xml.etree.ElementTree as ET
+
+import scraper
+
 from contextlib import contextmanager
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +48,7 @@ DB_PATH = DATA_DIR / "shelf.db"
 CONFIG_PATH = BASE / "config.json"
 WEB_DIR = BASE / "web"
 THUMB_DIR = DATA_DIR / "thumbs"
+POSTER_DIR = DATA_DIR / "posters"
 
 VIDEO_EXTS = frozenset({
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v",
@@ -117,7 +121,17 @@ CREATE TABLE IF NOT EXISTS assets (
     added_at    TEXT NOT NULL,
     last_seen   TEXT NOT NULL,
     edited      INTEGER NOT NULL DEFAULT 0,
-    missing     INTEGER NOT NULL DEFAULT 0
+    missing     INTEGER NOT NULL DEFAULT 0,
+    original_title TEXT NOT NULL DEFAULT '',
+    director    TEXT NOT NULL DEFAULT '',
+    runtime     INTEGER,
+    imdb        TEXT NOT NULL DEFAULT '',
+    poster      TEXT NOT NULL DEFAULT '',
+    scraped_source  TEXT NOT NULL DEFAULT '',
+    scraped_at      TEXT NOT NULL DEFAULT '',
+    external_id     TEXT NOT NULL DEFAULT '',
+    external_url    TEXT NOT NULL DEFAULT '',
+    scrape_status   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_assets_title  ON assets(title);
 CREATE INDEX IF NOT EXISTS idx_assets_size   ON assets(size);
@@ -139,7 +153,30 @@ EDITABLE_FIELDS = frozenset({
 })
 METADATA_FIELDS = frozenset({"title", "year", "rating", "tags", "plot", "cover"})
 
-CONFIG = {"roots": [], "port": 8765}
+# 旧库平滑升级：这些列是加刮削功能后新增的。
+EXTRA_COLUMNS = {
+    "original_title": "TEXT NOT NULL DEFAULT ''",
+    "director": "TEXT NOT NULL DEFAULT ''",
+    "runtime": "INTEGER",
+    "imdb": "TEXT NOT NULL DEFAULT ''",
+    "poster": "TEXT NOT NULL DEFAULT ''",
+    "scraped_source": "TEXT NOT NULL DEFAULT ''",
+    "scraped_at": "TEXT NOT NULL DEFAULT ''",
+    "external_id": "TEXT NOT NULL DEFAULT ''",
+    "external_url": "TEXT NOT NULL DEFAULT ''",
+    "scrape_status": "TEXT NOT NULL DEFAULT ''",
+}
+
+SCRAPE_DEFAULTS = {
+    "provider": "wikidata",   # wikidata（零 key）/ auto
+    "tmdb_key": "",           # 可选，填了就优先用 TMDB
+    "omdb_key": "",           # 可选，补 IMDb 评分 / 海报
+    "language": "zh-CN",
+    "download_posters": True,
+    "overwrite": False,       # 默认只填空字段，绝不覆盖人工编辑
+}
+
+CONFIG = {"roots": [], "port": 8765, "scrape": dict(SCRAPE_DEFAULTS)}
 CONFIG_LOCK = threading.Lock()
 SCAN = {
     "running": False, "scanned": 0, "added": 0, "updated": 0,
@@ -147,6 +184,12 @@ SCAN = {
     "finished_at": None, "error": None,
 }
 SCAN_LOCK = threading.Lock()
+SCRAPE = {
+    "running": False, "total": 0, "done": 0, "ok": 0, "failed": 0,
+    "current": "", "current_title": "", "last_error": "", "cancel": False,
+    "started_at": None, "finished_at": None, "results": [],
+}
+SCRAPE_LOCK = threading.Lock()
 
 
 def now_str() -> str:
@@ -184,8 +227,13 @@ def db():
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    POSTER_DIR.mkdir(parents=True, exist_ok=True)
     with db() as con:
         con.executescript(SCHEMA)
+        have = {row["name"] for row in con.execute("PRAGMA table_info(assets)")}
+        for name, declaration in EXTRA_COLUMNS.items():
+            if name not in have:
+                con.execute(f"ALTER TABLE assets ADD COLUMN {name} {declaration}")
 
 
 def load_config() -> dict:
@@ -193,16 +241,22 @@ def load_config() -> dict:
         try:
             data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                stored = data.get("scrape") or {}
+                scrape = dict(SCRAPE_DEFAULTS)
+                if isinstance(stored, dict):
+                    scrape.update({k: v for k, v in stored.items() if k in SCRAPE_DEFAULTS})
                 return {"roots": list(data.get("roots") or []),
-                        "port": int(data.get("port") or 8765)}
+                        "port": int(data.get("port") or 8765),
+                        "scrape": scrape}
         except (ValueError, OSError, TypeError):
             pass
-    return {"roots": [], "port": 8765}
+    return {"roots": [], "port": 8765, "scrape": dict(SCRAPE_DEFAULTS)}
 
 
 def save_config() -> None:
     with CONFIG_LOCK:
-        snapshot = {"roots": list(CONFIG["roots"]), "port": int(CONFIG["port"])}
+        snapshot = {"roots": list(CONFIG["roots"]), "port": int(CONFIG["port"]),
+                    "scrape": dict(CONFIG.get("scrape") or SCRAPE_DEFAULTS)}
     CONFIG_PATH.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -487,6 +541,241 @@ def start_scan(roots: list[str] | None = None) -> bool:
     return True
 
 
+# --------------------------------------------------------------------------- 在线刮削
+
+def scrape_config() -> dict:
+    with CONFIG_LOCK:
+        return dict(CONFIG.get("scrape") or SCRAPE_DEFAULTS)
+
+
+def public_scrape_config() -> dict:
+    """前端用的配置视图：API key 只回传掩码，不泄漏明文。"""
+    cfg = scrape_config()
+    public = dict(cfg)
+    public["tmdb_configured"] = bool(cfg.get("tmdb_key"))
+    public["omdb_configured"] = bool(cfg.get("omdb_key"))
+    public["tmdb_key"] = "********" if public["tmdb_configured"] else ""
+    public["omdb_key"] = "********" if public["omdb_configured"] else ""
+    return public
+
+
+def cover_for(asset_id: str) -> str | None:
+    try:
+        ident = int(asset_id)
+    except (TypeError, ValueError):
+        return None
+    with db() as con:
+        row = con.execute("SELECT cover, poster FROM assets WHERE id=?", (ident,)).fetchone()
+    return (row["poster"] or row["cover"] or None) if row else None
+
+
+def clean_query(title: str) -> str:
+    """文件名解析出来的标题常混着年份、清晰度、编码组名，刮削前先洗一遍。"""
+    text = re.sub(r"\b(?:19|20)\d{2}\b", " ", title or "")
+    text = re.sub(r"\b(?:2160p|1080p|720p|480p|4k|8k|uhd|bluray|blu-ray|web-?dl|"
+                  r"x264|x265|h264|h265|hevc|hdr|remux|10bit|aac|dts|atmos)\b",
+                  " ", text, flags=re.I)
+    text = re.sub(r"[._]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip(" -–—_")
+
+
+def _blank(value) -> bool:
+    return value is None or value == "" or value == "[]" or value == [] \
+        or value == 0 or value == 0.0
+
+
+def apply_scrape(ident: int, meta: dict, overwrite: bool = False,
+                 want_poster: bool = True, force: bool = False) -> dict:
+    """把刮削结果写回库。
+
+    不变量：默认只填空字段；人工编辑过的条目，标题 / 年份 / 评分 / 标签 / 简介
+    一律不动（除非手动匹配时显式勾选覆盖）；海报单独存 poster 列，重扫冲不掉。
+    """
+    with db() as con:
+        row = con.execute("SELECT * FROM assets WHERE id=?", (ident,)).fetchone()
+    if not row:
+        raise scraper.ScrapeError("条目不存在")
+
+    guarded = bool(row["edited"]) and not force
+    updates: dict = {}
+
+    def put(field: str, value) -> None:
+        if _blank(value):
+            return
+        if guarded and field in ("title", "year", "rating", "tags", "plot"):
+            return
+        if overwrite or force or _blank(row[field]):
+            updates[field] = value
+
+    put("title", meta.get("title"))
+    put("original_title", meta.get("original_title"))
+    put("year", meta.get("year"))
+    put("rating", meta.get("rating"))
+    put("plot", (meta.get("plot") or "")[:1200])
+    put("director", meta.get("director"))
+    put("runtime", meta.get("runtime"))
+    put("imdb", meta.get("imdb"))
+    put("external_id", meta.get("external_id"))
+    put("external_url", meta.get("external_url"))
+
+    if not guarded:
+        try:
+            current_tags = json.loads(row["tags"] or "[]")
+        except (ValueError, TypeError):
+            current_tags = []
+        genres = [g.strip() for g in (meta.get("genres") or [])
+                  if isinstance(g, str) and g.strip()]
+        if genres and (overwrite or force or len(current_tags) <= 2):
+            merged = list(dict.fromkeys(current_tags + genres))[:14]
+            updates["tags"] = json.dumps(merged, ensure_ascii=False)
+        try:
+            current_actors = json.loads(row["actors"] or "[]")
+        except (ValueError, TypeError):
+            current_actors = []
+        actors = [a.strip() for a in (meta.get("actors") or [])
+                  if isinstance(a, str) and a.strip()]
+        if actors and (overwrite or force or not current_actors):
+            updates["actors"] = json.dumps(actors[:14], ensure_ascii=False)
+
+    poster_written = ""
+    if want_poster and meta.get("poster_url"):
+        try:
+            payload = scraper.fetch_image(meta["poster_url"])
+            POSTER_DIR.mkdir(parents=True, exist_ok=True)
+            suffix = ".png" if payload.startswith(b"\x89PNG") else ".jpg"
+            target = POSTER_DIR / f"{ident}{suffix}"
+            for stale in POSTER_DIR.glob(f"{ident}.*"):
+                if stale != target:
+                    stale.unlink(missing_ok=True)
+            target.write_bytes(payload)
+            poster_written = str(target)
+        except (scraper.ScrapeError, OSError):
+            poster_written = ""
+    if poster_written and (overwrite or force or not row["poster"]):
+        updates["poster"] = poster_written
+
+    updates["scraped_source"] = meta.get("source") or "wikidata"
+    updates["scraped_at"] = now_str()
+    updates["scrape_status"] = "ok"
+    with db() as con:
+        con.execute(
+            "UPDATE assets SET " + ", ".join(f"{k}=?" for k in updates) + " WHERE id=?",
+            (*updates.values(), ident),
+        )
+    return {"id": ident, "title": meta.get("title") or "",
+            "source": updates["scraped_source"],
+            "fields": sorted(k for k in updates
+                             if k not in ("scraped_source", "scraped_at", "scrape_status")),
+            "poster": bool(poster_written), "guarded": guarded}
+
+
+def scrape_one(ident: int, cfg: dict, query: str | None = None,
+               qid: str | None = None, overwrite: bool = False,
+               force: bool = False) -> dict:
+    with db() as con:
+        row = con.execute("SELECT title, year, filename FROM assets WHERE id=?", (ident,)).fetchone()
+    if not row:
+        raise scraper.ScrapeError("条目不存在")
+    parsed = parse_filename(row["filename"])
+    year = row["year"] or parsed.get("year")
+    # 查询词优先取文件名解析结果：标题可能被人改过，用它会搜不到任何东西。
+    from_file = clean_query(parsed.get("title") or "")
+    title = ((query or "").strip() or from_file
+             or clean_query(row["title"]) or row["title"])
+    want_poster = bool(cfg.get("download_posters", True))
+    if qid:
+        meta = scraper.fetch_by_id(qid, want_poster=want_poster)
+    else:
+        meta = scraper.resolve(title, year, cfg, want_poster=want_poster)
+    return apply_scrape(ident, meta,
+                        overwrite=bool(overwrite or cfg.get("overwrite")),
+                        want_poster=want_poster, force=force)
+
+
+def scrape_worker(ids: list[int], cfg: dict, overwrite: bool) -> None:
+    results: list[dict] = []
+    for ident in ids:
+        with SCRAPE_LOCK:
+            if SCRAPE["cancel"]:
+                break
+        try:
+            with db() as con:
+                found = con.execute("SELECT title FROM assets WHERE id=?", (ident,)).fetchone()
+            with SCRAPE_LOCK:
+                SCRAPE["current"] = str(ident)
+                SCRAPE["current_title"] = found["title"] if found else ""
+            result = scrape_one(ident, cfg, overwrite=overwrite)
+            results.append({"id": ident, "ok": True, "title": result["title"],
+                            "source": result["source"]})
+            with SCRAPE_LOCK:
+                SCRAPE["ok"] += 1
+        except Exception as error:  # noqa: BLE001 - 单部失败不能拖垮整批
+            results.append({"id": ident, "ok": False, "error": str(error)})
+            try:
+                with db() as con:
+                    con.execute("UPDATE assets SET scrape_status='failed' WHERE id=?", (ident,))
+            except sqlite3.Error:
+                pass
+            with SCRAPE_LOCK:
+                SCRAPE["failed"] += 1
+                SCRAPE["last_error"] = str(error)
+        with SCRAPE_LOCK:
+            SCRAPE["done"] += 1
+            SCRAPE["results"] = results[-40:]
+        time.sleep(0.2)
+    with SCRAPE_LOCK:
+        SCRAPE.update({"running": False, "finished_at": now_str(),
+                       "current": "", "current_title": "", "cancel": False})
+
+
+def start_scrape(mode: str = "missing", ids: list | None = None,
+                 overwrite: bool | None = None) -> dict:
+    with SCRAPE_LOCK:
+        if SCRAPE["running"]:
+            return {"started": False, "message": "刮削正在进行中"}
+    cfg = scrape_config()
+    effective = bool(cfg.get("overwrite")) if overwrite is None else bool(overwrite)
+    with db() as con:
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            rows = con.execute(
+                f"SELECT id FROM assets WHERE id IN ({placeholders}) AND missing=0 ORDER BY id",
+                tuple(ids),
+            ).fetchall()
+        elif mode == "all":
+            rows = con.execute("SELECT id FROM assets WHERE missing=0 ORDER BY id").fetchall()
+        elif mode == "failed":
+            rows = con.execute(
+                "SELECT id FROM assets WHERE missing=0 AND scrape_status='failed' ORDER BY id"
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT id FROM assets WHERE missing=0 "
+                "AND (scraped_at='' OR scraped_at IS NULL) ORDER BY id"
+            ).fetchall()
+    targets = [r["id"] for r in rows]
+    if not targets:
+        return {"started": False, "message": "没有需要刮削的条目", "total": 0}
+    with SCRAPE_LOCK:
+        SCRAPE.update({
+            "running": True, "total": len(targets), "done": 0, "ok": 0, "failed": 0,
+            "current": "", "current_title": "", "last_error": "", "cancel": False,
+            "started_at": now_str(), "finished_at": None, "results": [],
+        })
+    threading.Thread(target=scrape_worker,
+                     args=(targets, cfg, effective), daemon=True).start()
+    return {"started": True, "total": len(targets),
+            "message": f"已开始刮削 {len(targets)} 部影片"}
+
+
+def stop_scrape() -> dict:
+    with SCRAPE_LOCK:
+        if not SCRAPE["running"]:
+            return {"stopped": False}
+        SCRAPE["cancel"] = True
+    return {"stopped": True, "message": "将在当前条目完成后停止"}
+
+
 # --------------------------------------------------------------------------- 查询
 
 SORT_COLUMNS = {
@@ -506,6 +795,10 @@ def row_to_dict(row: sqlite3.Row) -> dict:
     item["watched"] = bool(item["watched"])
     item["missing"] = bool(item["missing"])
     item["edited"] = bool(item["edited"])
+    # 扫描到的本地图片优先；没有则回退到刮削下载的海报。
+    item["local_cover"] = item.get("cover") or ""
+    item["cover"] = item.get("poster") or item.get("cover") or ""
+    item["scraped"] = bool(item.get("scraped_at"))
     item["size_human"] = human_size(item["size"])
     item["mtime_human"] = (
         datetime.fromtimestamp(item["mtime"]).strftime("%Y-%m-%d")
@@ -784,7 +1077,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_file(target)
                 return self.send_json({"error": "not found"}, 404)
             if path.startswith("/cover/"):
-                cover = self.asset_path(path[len("/cover/"):], "cover")
+                cover = cover_for(path[len("/cover/"):])
                 if not cover or Path(cover).suffix.casefold() not in IMAGE_EXTS:
                     return self.send_json({"error": "no cover"}, 404)
                 return self.send_file(Path(cover))
@@ -809,6 +1102,24 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/scan/status":
                 with SCAN_LOCK:
                     return self.send_json(dict(SCAN))
+            if path == "/api/scrape/status":
+                with SCRAPE_LOCK:
+                    return self.send_json(dict(SCRAPE))
+            if path == "/api/scrape/config":
+                return self.send_json(public_scrape_config())
+            if path == "/api/scrape/search":
+                query = (params.get("q") or [""])[0].strip()
+                if not query:
+                    return self.send_json({"error": "请输入搜索关键词"}, 400)
+                try:
+                    year = int((params.get("year") or [""])[0]) or None
+                except ValueError:
+                    year = None
+                try:
+                    found = scraper.candidates(query, year, limit=10)
+                except scraper.ScrapeError as error:
+                    return self.send_json({"candidates": [], "error": str(error)})
+                return self.send_json({"candidates": found, "total": len(found)})
             if path.startswith("/api/items/"):
                 ident = path[len("/api/items/"):]
                 with db() as con:
@@ -846,6 +1157,52 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         body = self.read_json()
         try:
+            if path == "/api/scrape":
+                raw_ids = body.get("ids")
+                ids = [int(x) for x in raw_ids] if isinstance(raw_ids, list) else None
+                overwrite = body.get("overwrite")
+                return self.send_json(start_scrape(
+                    str(body.get("mode") or "missing"), ids,
+                    bool(overwrite) if overwrite is not None else None))
+            if path == "/api/scrape/config":
+                cfg = scrape_config()
+                for key in ("provider", "language", "download_posters", "overwrite"):
+                    if key in body:
+                        cfg[key] = body[key]
+                for key in ("tmdb_key", "omdb_key"):
+                    if key in body:
+                        value = str(body[key] or "").strip()
+                        if value != "********":  # 掩码＝保持已保存的 key 不变
+                            cfg[key] = value
+                with CONFIG_LOCK:
+                    CONFIG["scrape"] = cfg
+                save_config()
+                return self.send_json(public_scrape_config())
+            if path == "/api/scrape/stop":
+                return self.send_json(stop_scrape())
+            if path == "/api/scrape/bind":
+                qid = str(body.get("qid") or "").strip()
+                if not qid:
+                    return self.send_json({"error": "缺少 qid"}, 400)
+                # 手动指定了条目＝明确想纠正元数据，默认覆盖非人工编辑的字段；
+                # 人工编辑过的条目仍由 apply_scrape 的 guarded 规则保护。
+                result = scrape_one(int(body.get("id")), scrape_config(), qid=qid,
+                                    overwrite=bool(body.get("overwrite", True)),
+                                    force=bool(body.get("force")))
+                return self.send_json(result)
+            if path.startswith("/api/scrape/") and path.endswith("/reset-poster"):
+                ident = int(path[len("/api/scrape/"):-len("/reset-poster")])
+                with db() as con:
+                    con.execute("UPDATE assets SET poster='' WHERE id=?", (ident,))
+                for stale in POSTER_DIR.glob(f"{ident}.*"):
+                    stale.unlink(missing_ok=True)
+                return self.send_json({"reset": True})
+            if path.startswith("/api/scrape/"):
+                query = body.get("q")
+                result = scrape_one(int(path[len("/api/scrape/"):]), scrape_config(),
+                                    query=str(query).strip() if query else None,
+                                    overwrite=bool(body.get("overwrite")))
+                return self.send_json(result)
             if path == "/api/scan":
                 roots = body.get("roots")
                 started = start_scan(roots if isinstance(roots, list) else None)
@@ -874,6 +1231,10 @@ class Handler(BaseHTTPRequestHandler):
                     subprocess.Popen(["xdg-open", video])
                 return self.send_json({"opened": True})
             return self.send_json({"error": "unknown api"}, 404)
+        except scraper.ScrapeError as error:
+            return self.send_json({"error": str(error)}, 400)
+        except (ValueError, TypeError) as error:
+            return self.send_json({"error": "参数不合法：" + str(error)}, 400)
         except Exception as error:  # noqa: BLE001
             traceback.print_exc()
             return self.send_json({"error": str(error)}, 500)
@@ -960,6 +1321,7 @@ def main() -> None:
     loaded = load_config()
     CONFIG["port"] = args.port or loaded["port"]
     CONFIG["roots"] = [str(Path(p).resolve()) for p in args.root] or loaded["roots"]
+    CONFIG["scrape"] = loaded.get("scrape") or dict(SCRAPE_DEFAULTS)
     if args.root:
         save_config()
 

@@ -1,6 +1,6 @@
 # 我的片库 · My Shelf
 
-一个**本地优先、零第三方依赖**的影片媒体库：指定文件夹即可扫盘建档，生成海报墙，支持搜索、多维筛选、排序、详情编辑、在线播放与续播、统计和导出。
+一个**本地优先、零第三方依赖**的影片媒体库：指定文件夹即可扫盘建档，生成海报墙，支持在线元数据刮削、搜索、多维筛选、排序、详情编辑、在线播放与续播、统计和导出。
 
 本目录是 [peach-mitao/peach](https://github.com/peach-mitao/peach) 的一个**独立轻量派生实验**，放在 fork 里作为 `my-shelf/` 子目录，不改动上游任何主线代码。它只借鉴 Peach 扫描层的三条设计不变量，其余全部用 Python 标准库重新实现：
 
@@ -51,11 +51,12 @@ python shelf.py --root "D:\Movies" --root "E:\Series" --no-browser
 | `--root` | 媒体根目录，可重复指定多个；不传则读取 `config.json` |
 | `--port` | 端口，默认 `8765` |
 | `--no-browser` | 不自动打开浏览器 |
-| `--db` | SQLite 路径，默认 `data/shelf.db` |
+| `--no-scan` | 启动时不自动扫描 |
 
 ## 功能
 
 - **扫盘**：递归识别常见视频格式，解析文件名中的年份、分辨率、来源、分卷；读取同名 `.nfo` 的标题 / 年份 / 评分 / 剧情 / 类型 / 演员；优先用同名海报，其次 `poster.*` / `folder.*` / `cover.*`，最后目录内第一张图。
+- **在线刮削**：从 Wikidata + 维基百科抓取原名、年份、导演、演员、题材、剧情、IMDb 编号与海报；零 Key 可用，支持 TMDB / OMDb 可选源、批量任务、手动匹配、失败重试。详见下节。
 - **海报墙**：网格 / 列表双视图、浅色 / 深色主题、卡片悬停操作、缺失文件灰显。
 - **搜索筛选**：标题 / 原名 / 剧情 / 标签全文搜索；按标签、年代、格式、清晰度、目录、观看状态、收藏筛选；按标题 / 年份 / 评分 / 大小 / 加入时间排序。
 - **详情编辑**：标题、原名、年份、评分、标签、剧情、收藏、已看；编辑后打 `edited` 标记，重扫保留。
@@ -64,6 +65,33 @@ python shelf.py --root "D:\Movies" --root "E:\Series" --no-browser
 - **重复检测**：按文件大小 + 采样哈希找出疑似重复，辅助整理。
 - **导出**：CSV 全量导出，便于备份或迁移。
 - **封面与串流**：`/cover/<id>` 直接输出本地图片；`/stream/<id>` 支持 Range 与常见视频 MIME。
+
+## 在线刮削
+
+点顶部「刮削」→「刮削未完成的」，后台会逐部联网补齐元数据。刮削器在独立的 `scraper.py` 里，纯标准库、不用任何第三方包或 SDK。
+
+### 数据源
+
+| 源 | 需要 Key | 提供什么 | 备注 |
+| --- | --- | --- | --- |
+| **Wikidata + 维基百科** | 否（默认） | 原名、上映年、导演、演员、题材、时长、IMDb 编号、剧情摘要、海报 | 实测可用，中文条目用 `variant=zh-cn` 转简体 |
+| TMDB | 是，选填 | 评分、简介、演职员、类型、海报 | 字段最全；填了 Key 就优先用，超时或不可达自动回退 Wikidata |
+| OMDb | 是，选填 | IMDb 评分、简介、海报 | 作为补充源，只填主源缺的字段 |
+
+匹配逻辑：先按**文件名解析出的标题 + 年份**（不用可能被人工改过的标题）搜 Wikidata，再按「是不是电影 + 年份是否吻合 + 标题相似度」打分排序，取最高分且超过阈值的条目。低于阈值时明确报“没有可信匹配”，不瞎填。
+
+### 写入规则（与扫描层一致的不变量）
+
+- 默认**只填空字段**，不覆盖已有 NFO 资料；勾选「覆盖已有资料」才替换。
+- **人工编辑过的标题 / 年份 / 评分 / 标签 / 简介永远保留**，只补导演、原名、海报这类空缺。
+- 海报单独存在 `poster` 列并缓存到 `data/posters/<id>.jpg`，与扫描到的本地封面分开，**重新扫描不会冲掉**；详情里可一键「用回本地封面」。
+- 失败只标记 `scrape_status='failed'`，不会写入半截数据；可以「重试失败的」或用「手动匹配」指定正确条目。
+
+### 手动匹配
+
+影片详情 →「手动匹配」→ 输入关键词搜索候选 → 点选条目即立刻刮削写入。手动绑定默认会覆盖非人工编辑的资料（包括标题），另提供「同时覆盖现有资料（含人工编辑）」勾选。
+
+两个 API Key 与开关保存在本机 `config.json`，前端只拿到掩码，不会明文回传。
 
 ## API
 
@@ -76,7 +104,16 @@ python shelf.py --root "D:\Movies" --root "E:\Series" --no-browser
 | PATCH | `/api/items/<id>` | 局部编辑（可改字段见上） |
 | POST | `/api/scan` | 触发重新扫描 |
 | GET | `/api/scan/status` | 扫描进度 |
-| GET/PUT | `/api/roots` | 读取 / 保存媒体目录 |
+| GET/POST/DELETE | `/api/roots` | 读取 / 添加 / 移除媒体目录 |
+| GET | `/api/scrape/status` | 刮削任务进度、成功失败数与最近日志 |
+| GET | `/api/scrape/config` | 刮削配置（Key 脱敏） |
+| POST | `/api/scrape/config` | 保存刮削配置 |
+| POST | `/api/scrape` | 启动批量刮削，`mode` = `missing` / `failed` / `all`，或传 `ids` |
+| POST | `/api/scrape/stop` | 请求停止当前批次 |
+| POST | `/api/scrape/<id>` | 单部刮削，可带 `q` 指定查询词 |
+| GET | `/api/scrape/search?q=` | 手动匹配用的候选列表 |
+| POST | `/api/scrape/bind` | 按 `qid` 绑定指定条目并刮削 |
+| POST | `/api/scrape/<id>/reset-poster` | 丢弃刮削海报，切回本地封面 |
 | GET | `/api/duplicates` | 疑似重复文件 |
 | GET | `/api/export` | CSV 导出 |
 | GET | `/cover/<id>` | 封面图 |
@@ -86,17 +123,23 @@ python shelf.py --root "D:\Movies" --root "E:\Series" --no-browser
 
 ```
 my-shelf/
-├── shelf.py          # 标准库 HTTP 服务 + SQLite + 扫描 / NFO / 封面 / Range
+├── shelf.py          # 标准库 HTTP 服务 + SQLite + 扫描 / NFO / 封面 / Range / 刮削调度
+├── scraper.py        # 在线刮削：Wikidata + Wikipedia，可选 TMDB / OMDb
 ├── web/index.html    # 单文件海报墙（无构建、无依赖）
 ├── start.bat         # Windows 一键启动
-├── config.json       # 媒体目录配置（运行时生成）
-├── data/shelf.db     # 索引数据库（运行时生成，建议加入 .gitignore）
+├── .gitignore        # 排除运行时产物
+├── config.json       # 媒体目录、端口、刮削配置（运行时生成，含可选 API Key）
+├── data/shelf.db     # 索引数据库（运行时生成）
+├── data/posters/     # 刮削海报缓存（运行时生成）
 └── README.md
 ```
 
 ## 已知边界
 
-- 封面取本地图片；没有图片时显示渐变占位卡。未内置 ffmpeg 截帧与在线元数据刮削源。
+- 未内置 ffmpeg 截帧；没有海报时显示渐变占位卡。
+- Wikidata 的部分中文标签仍是繁体（维基百科摘要已转简体）；评分只有 TMDB / OMDb 源能提供，默认零 Key 源不含评分。
+- TMDB API 在部分网络环境下不可达，此时会自动回退 Wikidata；Wikidata 对冷门影片可能没有条目，会标记为失败而非乱填。
+- Wikipedia 海报受版权限制，部分影片拿不到图（例如《完美的日子》），此时保留渐变占位卡或本地封面。
 - `demo-library/` 是占位文件，只用于看界面与验证扫描链路，真实播放请添加自己的影片目录。
 - 离线演示模式的数据只存在浏览器内存里，刷新页面即还原；真实模式下所有改动写入 `data/shelf.db`。
 - 浏览器能否直接播放取决于编码格式（H.264/AAC 的 MP4 兼容性最好；MKV/HEVC 可能需外部播放器）。
