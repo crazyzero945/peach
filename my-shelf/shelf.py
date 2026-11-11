@@ -935,6 +935,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 500)
 
 
+def probe_running_shelf(port: int) -> bool:
+    """端口上是否已经跑着一个「我的片库」服务（避免重复启动、端口冲突）。"""
+    from urllib.request import urlopen
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/api/stats", timeout=0.8) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+            return isinstance(payload, dict) and "count" in payload
+    except Exception:
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="我的片库 · 本地媒体库服务")
     parser.add_argument("--root", action="append", default=[],
@@ -955,11 +968,43 @@ def main() -> None:
     if roots and not args.no_scan:
         start_scan(roots)
 
+    requested = CONFIG["port"]
+    if probe_running_shelf(requested):
+        url = f"http://127.0.0.1:{requested}"
+        print("=" * 58)
+        print("  我的片库已经在运行了")
+        print(f"  地址      {url}")
+        print("  正在打开浏览器。要停止服务，关闭原来那个命令行窗口即可。")
+        print("=" * 58, flush=True)
+        if not args.no_browser:
+            webbrowser.open(url)
+        return
+
+    server = None
+    last_error = None
+    for port in range(requested, requested + 12):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            CONFIG["port"] = port
+            break
+        except OSError as error:
+            last_error = error
+    if server is None:
+        print("=" * 58)
+        print(f"  启动失败：{requested} ~ {requested + 11} 端口都被占用。")
+        print(f"  原因：{last_error}")
+        print("  可以指定别的端口：python shelf.py --port 9000")
+        print("=" * 58, flush=True)
+        raise SystemExit(1)
+
+    server.daemon_threads = True
     url = f"http://127.0.0.1:{CONFIG['port']}"
     print("=" * 58)
     print("  我的片库 my-shelf  ·  本地媒体库")
     print("=" * 58)
     print(f"  地址      {url}")
+    if CONFIG["port"] != requested:
+        print(f"  注意      {requested} 被占用，已自动改用 {CONFIG['port']}")
     print(f"  数据库    {DB_PATH}")
     print(f"  媒体目录  {len(roots)} 个" + ("，正在后台扫描…" if roots else "（尚未添加）"))
     if not roots:
@@ -968,8 +1013,6 @@ def main() -> None:
     print("  按 Ctrl+C 停止")
     print("=" * 58, flush=True)
 
-    server = ThreadingHTTPServer(("127.0.0.1", CONFIG["port"]), Handler)
-    server.daemon_threads = True
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

@@ -249,6 +249,18 @@ select{min-width:112px;cursor:pointer}
   .list-head>*:nth-child(n+4),.list-row>*:nth-child(n+4){display:none}
   .hero{flex-direction:column}.hero-cover{width:120px}
 }
+/* 离线演示模式提示条与演示播放画面 */
+.demo-banner{position:relative;z-index:60;background:#fff4e2;border-bottom:1px solid #f1d7a8;color:#7a4d05;font-size:13px}
+[data-theme="dark"] .demo-banner{background:#382a12;border-color:#5b451f;color:#f2d9a6}
+.demo-banner-in{max-width:1400px;margin:0 auto;padding:9px 20px;display:flex;align-items:center;gap:11px;line-height:1.55}
+.demo-banner b{flex:none;background:#e5a13a;color:#fff;border-radius:5px;padding:2px 9px;font-size:12px;font-weight:700}
+.demo-banner span{flex:1}
+.demo-banner code{background:rgba(0,0,0,.08);padding:1px 5px;border-radius:4px;font-size:12px}
+[data-theme="dark"] .demo-banner code{background:rgba(255,255,255,.12)}
+.demo-banner button{flex:none;border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:4px 11px;cursor:pointer;font-size:12px;opacity:.8}
+.demo-banner button:hover{opacity:1}
+.demo-canvas{width:100%;aspect-ratio:16/9;display:block;background:#0d1117;border-radius:8px;cursor:pointer}
+@media(max-width:640px){.demo-banner-in{flex-wrap:wrap;padding:9px 14px}}
 </style>
 </head>
 <body>
@@ -421,7 +433,185 @@ const state = {
   page:1, pageSize:60, view: localStorage.getItem('shelf-view') || 'grid'
 };
 
+/* ============ 离线演示模式 ============
+   直接以静态文件打开页面时（没有 Python 后端），所有 /api/* 都会 404。
+   这里探测一次后端，探测不到就切换到内存中的示例数据，保证界面完整可用。 */
+let OFFLINE = null;
+const DEMO_ROOT = '内置演示片库';
+
+function demoPoster(title, year, c1, c2){
+  const t = String(title).replace(/[&<>"']/g,'')
+    .replace(/[^\x00-\x7F]/g, ch => '&#'+ch.codePointAt(0)+';');
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">'
+    + '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+    + '<stop offset="0" stop-color="'+c1+'"/><stop offset="1" stop-color="'+c2+'"/>'
+    + '</linearGradient></defs>'
+    + '<rect width="300" height="450" fill="url(#g)"/>'
+    + '<circle cx="238" cy="108" r="74" fill="#ffffff" opacity=".10"/>'
+    + '<circle cx="52" cy="342" r="116" fill="#000000" opacity=".13"/>'
+    + '<rect x="22" y="22" width="256" height="406" fill="none" stroke="#ffffff" stroke-opacity=".30"/>'
+    + '<text x="150" y="232" text-anchor="middle" fill="#fff" font-size="27" font-family="sans-serif" font-weight="700">'+t+'</text>'
+    + '<text x="150" y="272" text-anchor="middle" fill="#fff" fill-opacity=".75" font-size="17" font-family="sans-serif" letter-spacing="4">'+String(year||'')+'</text>'
+    + '<text x="150" y="402" text-anchor="middle" fill="#fff" fill-opacity=".55" font-size="11" font-family="sans-serif" letter-spacing="3">MY SHELF - DEMO</text>'
+    + '</svg>';
+  return 'data:image/svg+xml;base64,' + btoa(svg);
+}
+function humanSize(n){
+  const u=['B','KB','MB','GB','TB']; let i=0, v=Number(n)||0;
+  while(v>=1024 && i<u.length-1){ v/=1024; i++; }
+  return (i===0 ? v : v.toFixed(v<10?1:0)) + ' ' + u[i];
+}
+const DEMO_SEED = [
+  {title:'沙丘', file:'Dune.2021.2160p.mkv', year:2021, rating:8.2, tags:['科幻','冒险','4K'], ext:'.mkv', res:'4K', size:19.6*1073741824,
+   plot:'厄拉科斯星上的香料与预言，少年保罗在沙漠中走向自己的命运。', studio:'华纳 / 传奇', actors:['提莫西·查拉梅','丽贝卡·弗格森'], code:'DUNE-2021', c1:'#ec9e5c', c2:'#5c2830'},
+  {title:'降临', file:'Arrival.2016.1080p.mp4', year:2016, rating:7.9, tags:['科幻','剧情','1080p'], ext:'.mp4', res:'1080p', size:8.4*1073741824,
+   plot:'语言学家与七肢桶的对话，当学会一门语言，也就学会了它的时间观。', studio:'派拉蒙', actors:['艾米·亚当斯','杰瑞米·雷纳'], code:'ARRIVAL', c1:'#466e96', c2:'#121e38'},
+  {title:'银翼杀手 2049', file:'Blade.Runner.2049.2017.1080p.mkv', year:2017, rating:8.3, tags:['科幻','悬疑','1080p'], ext:'.mkv', res:'1080p', size:14.2*1073741824,
+   plot:'复制人与记忆的边界，一个被藏起来的奇迹。', studio:'华纳', actors:['瑞恩·高斯林','哈里森·福特'], code:'BR2049', c1:'#b45c4e', c2:'#281e3e'},
+  {title:'星际穿越', file:'Interstellar.2014.720p.mp4', year:2014, rating:9.4, tags:['科幻','家庭','720p'], ext:'.mp4', res:'720p', size:6.1*1073741824,
+   plot:'穿越虫洞寻找新家园，爱是唯一能穿越维度的东西。', studio:'派拉蒙', actors:['马修·麦康纳','安妮·海瑟薇'], code:'INTERSTELLAR', c1:'#6084a0', c2:'#10182c'},
+  {title:'完美的日子', file:'Perfect.Days.2023.webm', year:2023, rating:8.0, tags:['剧情'], ext:'.webm', res:'', size:3.8*1073741824,
+   plot:'东京厕所清洁工的日常，木漏日与卡带里的老歌。', studio:'Neon', actors:['役所广司'], code:'PERFECT-DAYS', c1:'#78a078', c2:'#1e372d'},
+  {title:'布达佩斯大饭店', file:'The.Grand.Budapest.Hotel.2014.1080p.mp4', year:2014, rating:8.9, tags:['喜剧','剧情','1080p'], ext:'.mp4', res:'1080p', size:9.2*1073741824,
+   plot:'一位传奇门房与一幅失窃名画，以及一个正在消失的世界。', studio:'福斯探照灯', actors:['拉尔夫·费因斯','托尼·雷沃罗利'], code:'GBH', c1:'#d68e9e', c2:'#502846'},
+  {title:'Same Copy A', file:'Same.Copy.A.mp4', year:null, rating:null, tags:[], ext:'.mp4', res:'', size:4096,
+   plot:'用于演示重复文件检测的样本。', studio:'', actors:[], code:'', c1:'#6b7a8f', c2:'#232c3a'},
+  {title:'Same Copy B', file:'Same.Copy.B.mkv', year:null, rating:null, tags:[], ext:'.mkv', res:'', size:4096,
+   plot:'与 Same Copy A 大小完全相同，会出现在重复检测里。', studio:'', actors:[], code:'', c1:'#8a7d6b', c2:'#2c2620'}
+];
+let DEMO = DEMO_SEED.map((d,i)=>({
+  id:i+1, path:DEMO_ROOT+' / '+d.file, root:DEMO_ROOT, title:d.title, filename:d.file,
+  folder:DEMO_ROOT+' / '+String(i+1).padStart(2,'0'),
+  ext:d.ext, size:d.size, mtime:1762819200, year:d.year, rating:d.rating, tags:d.tags.slice(),
+  plot:d.plot, cover:demoPoster(d.title,d.year,d.c1,d.c2), studio:d.studio, actors:d.actors.slice(),
+  resolution:d.res, code:d.code, favorite:false, watched:false, progress:0, note:'',
+  added_at:'2026-11-11 00:00', last_seen:'2026-11-11 00:00', edited:false, missing:false,
+  size_human:humanSize(d.size), mtime_human:'2026-11-11'
+}));
+
+function demoCount(fn){
+  const m=new Map();
+  DEMO.forEach(i=>{ const v=fn(i); (Array.isArray(v)?v:[v]).forEach(x=>{
+    if(x!=='' && x!==null && x!==undefined) m.set(x,(m.get(x)||0)+1);
+  }); });
+  return [...m].map(([value,count])=>({value,count})).sort((a,b)=>b.count-a.count || String(a.value).localeCompare(String(b.value)));
+}
+function demoFacets(){
+  return {
+    tags:demoCount(i=>i.tags), years:demoCount(i=>i.year?String(i.year):''),
+    exts:demoCount(i=>i.ext), resolutions:demoCount(i=>i.resolution),
+    folders:demoCount(i=>i.folder), duplicate_sizes:[]
+  };
+}
+function demoStats(){
+  const n=DEMO.length, bytes=DEMO.reduce((s,i)=>s+i.size,0);
+  return {count:n, bytes, size_human:humanSize(bytes),
+    watched:DEMO.filter(i=>i.watched).length, favorite:DEMO.filter(i=>i.favorite).length,
+    edited:DEMO.filter(i=>i.edited).length, missing:DEMO.filter(i=>i.missing).length,
+    roots:1, by_ext:demoCount(i=>i.ext), by_year:demoCount(i=>i.year)};
+}
+function demoItems(qs){
+  const p=new URLSearchParams(qs||'');
+  let list=DEMO.slice();
+  if(p.get('show')!=='missing' && p.get('show')!=='all') list=list.filter(i=>!i.missing);
+  if(p.get('show')==='missing') list=list.filter(i=>i.missing);
+  const q=(p.get('q')||'').trim().toLowerCase();
+  if(q) list=list.filter(i=>[i.title,i.filename,i.plot,i.code,i.studio,i.folder,...i.tags,...i.actors]
+    .join(' ').toLowerCase().includes(q));
+  const tags=(p.get('tags')||'').split('|').filter(Boolean);
+  if(tags.length) list=list.filter(i=>tags.some(t=>i.tags.includes(t)));
+  for(const [key,fn] of [['year',i=>String(i.year||'')],['ext',i=>i.ext],
+                         ['resolution',i=>i.resolution],['folder',i=>i.folder]]){
+    const v=p.get(key); if(v) list=list.filter(i=>String(fn(i))===v);
+  }
+  for(const key of ['favorite','watched','edited']){
+    const v=p.get(key); if(v==='1'||v==='true') list=list.filter(i=>!!i[key]);
+  }
+  const sort=p.get('sort')||'added', order=p.get('order')||'desc';
+  const keyOf=i=>({title:i.title,year:i.year||0,rating:i.rating||0,size:i.size,added:i.id,mtime:i.mtime}[sort] ?? i.id);
+  list.sort((a,b)=>{ const x=keyOf(a),y=keyOf(b);
+    const c=typeof x==='string' ? x.localeCompare(y,'zh') : x-y;
+    return order==='asc'?c:-c; });
+  const page=Math.max(1,Number(p.get('page')||1)), size=Math.max(1,Number(p.get('page_size')||60));
+  const total=list.length, pages=Math.max(1,Math.ceil(total/size));
+  return {items:list.slice((page-1)*size,page*size).map(i=>({...i})),total,page,page_size:size,pages};
+}
+function demoDuplicates(){
+  const m=new Map();
+  DEMO.forEach(i=>{ const k=i.size; if(!m.has(k)) m.set(k,[]); m.get(k).push(i); });
+  const groups=[...m.values()].filter(g=>g.length>1).map(g=>({
+    size_human:humanSize(g[0].size), items:g.map(i=>({path:i.path}))
+  }));
+  return {groups, wasted:groups.reduce((s,g)=>s+g.items.length*4096,0)};
+}
+function demoHint(){ toast('演示模式：启动 start.bat 后即可连接你自己的影片'); }
+
+async function offlineApi(path, options={}){
+  const [route, qs] = path.split('?');
+  const method=(options.method||'GET').toUpperCase();
+  await Promise.resolve(); // 保持与网络请求一致的异步时序
+  let m;
+  if(route==='/api/stats') return demoStats();
+  if(route==='/api/facets') return demoFacets();
+  if(route==='/api/items') return demoItems(qs);
+  if(route==='/api/roots') return {roots:[DEMO_ROOT]};
+  if(route==='/api/scan/status') return {running:false,scanned:0,added:0,updated:0,missing:0,error:''};
+  if(route==='/api/scan'){ demoHint(); return {started:false}; }
+  if(route==='/api/duplicates') return demoDuplicates();
+  if(route==='/api/export') return {ok:true};
+  if((m=route.match(/^\/api\/items\/(\d+)$/))){
+    const it=DEMO.find(x=>x.id===Number(m[1]));
+    if(!it) throw new Error('找不到这部影片');
+    if(method==='PATCH'){
+      const p=JSON.parse(options.body||'{}');
+      for(const k of ['title','year','rating','tags','plot','note','favorite','watched','progress']){
+        if(!(k in p)) continue;
+        let v=p[k];
+        if(k==='tags' && typeof v==='string') v=v.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+        if(k==='year'||k==='rating') v=(v===''||v===null)?null:Number(v);
+        if(k==='favorite'||k==='watched') v=!!v;
+        if(k==='progress') v=Number(v)||0;
+        it[k]=v;
+      }
+      it.edited=true;
+      return {...it};
+    }
+    return {...it};
+  }
+  if(route.startsWith('/api/open/')){ demoHint(); return {ok:false}; }
+  demoHint();
+  return {};
+}
+async function detectBackend(){
+  try{
+    const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),2000);
+    const res=await fetch('/api/stats',{signal:ctl.signal,cache:'no-store'});
+    clearTimeout(timer);
+    if(!res.ok) throw new Error('no backend');
+    const d=await res.json();
+    if(typeof d.count!=='number') throw new Error('bad response');
+    OFFLINE=false;
+  }catch(e){ OFFLINE=true; }
+}
+function showDemoBanner(){
+  if($('#demo-banner')) return;
+  const el=document.createElement('div');
+  el.id='demo-banner'; el.className='demo-banner';
+  el.innerHTML='<div class="demo-banner-in"><b>演示模式</b>'
+    + '<span>正在展示内置示例数据，搜索、筛选、详情、编辑、收藏都能正常点。要管理自己的影片，'
+    + '请双击 <code>start.bat</code> 启动服务，再打开 <code>http://127.0.0.1:8765</code>。</span>'
+    + '<button type="button">知道了</button></div>';
+  document.body.insertBefore(el,document.body.firstChild);
+  el.querySelector('button').onclick=()=>el.remove();
+}
+function coverSrc(item){
+  if(!item.cover) return '';
+  return item.cover.indexOf('data:')===0 ? item.cover : '/cover/'+item.id;
+}
+
 async function api(path, options={}){
+  if(OFFLINE===null) await detectBackend();
+  if(OFFLINE) return offlineApi(path,options);
   const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, options));
   const data = await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -478,7 +668,8 @@ function renderFilters(){
 function coverHtml(item, cls){
   const h = hue(item.id);
   const ph = `<div class="${cls||'ph'}" style="--hue:${h}"><span class="ph-title">${esc(item.title)}</span><span class="ph-ext">${esc(item.ext.replace('.','').toUpperCase())}</span></div>`;
-  return item.cover ? `<img src="/cover/${item.id}" loading="lazy" alt="" onerror="this.remove()">${ph}` : ph;
+  const src = coverSrc(item);
+  return src ? `<img src="${esc(src)}" loading="lazy" alt="" onerror="this.remove()">${ph}` : ph;
 }
 function badges(item){
   const out = [];
@@ -508,7 +699,7 @@ function renderGrid(data){
 function renderList(data){
   return `<div class="list"><div class="list-head"><span></span><span>标题</span><span>年份</span><span>大小</span><span>格式</span><span>标签</span><span>状态</span></div>
   ${data.items.map(item => `<div class="list-row" data-id="${item.id}">
-    <div>${item.cover?`<img class="list-thumb" src="/cover/${item.id}" loading="lazy" onerror="this.outerHTML='<div class=list-thumb-ph style=--hue:${hue(item.id)}></div>'">`:`<div class="list-thumb-ph" style="--hue:${hue(item.id)}"></div>`}</div>
+    <div>${coverSrc(item)?`<img class="list-thumb" src="${esc(coverSrc(item))}" loading="lazy" onerror="this.outerHTML='<div class=list-thumb-ph style=--hue:${hue(item.id)}></div>'">`:`<div class="list-thumb-ph" style="--hue:${hue(item.id)}"></div>`}</div>
     <div><div class="list-title" title="${esc(item.title)}">${esc(item.title)}</div><div class="list-sub">${esc(item.filename)}</div></div>
     <div class="muted">${item.year||'—'}</div><div class="muted">${esc(item.size_human)}</div>
     <div class="muted">${esc(item.ext.replace('.','').toUpperCase())}</div>
@@ -630,15 +821,76 @@ async function patch(id,payload){
 }
 
 /* ---------------- 播放 ---------------- */
+/* 占位文件 / 浏览器不支持的编码：用 Canvas 演示画面代替黑屏报错 */
+let demoRAF=null, demoStart=0, demoElapsed=0, demoPaused=false;
+const DEMO_DUR=14;
+function stopDemo(){
+  if(demoRAF) cancelAnimationFrame(demoRAF);
+  demoRAF=null; demoPaused=false;
+  const cv=$('#demo-canvas'); if(cv) cv.style.display='none';
+  const v=$('#video'); if(v) v.style.display='';
+}
+function fmtTime(s){ return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }
+function demoPlayback(item){
+  const v=$('#video');
+  try{ v.pause(); v.removeAttribute('src'); }catch(e){}
+  v.style.display='none';
+  let cv=$('#demo-canvas');
+  if(!cv){
+    cv=document.createElement('canvas'); cv.id='demo-canvas'; cv.className='demo-canvas';
+    v.parentNode.insertBefore(cv,v);
+    cv.onclick=()=>{
+      demoPaused=!demoPaused;
+      if(!demoPaused){ demoStart=performance.now()-demoElapsed*1000; draw(); }
+    };
+  }
+  cv.style.display='block';
+  cv.width=960; cv.height=540;
+  const ctx=cv.getContext('2d'), W=960, H=540, hue0=hue(item?item.id:1);
+  demoElapsed=0; demoPaused=false; demoStart=performance.now();
+  function draw(){
+    if(!$('#modal-player').classList.contains('show')){ stopDemo(); return; }
+    const t=demoPaused?demoElapsed:Math.min(DEMO_DUR,(performance.now()-demoStart)/1000);
+    demoElapsed=t;
+    const g=ctx.createLinearGradient(0,0,W,H);
+    g.addColorStop(0,'hsl('+hue0+',40%,27%)'); g.addColorStop(1,'hsl('+((hue0+60)%360)+',36%,10%)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    const x=W*(.5+.32*Math.sin(t*.45)), y=H*(.45+.22*Math.cos(t*.37));
+    const rg=ctx.createRadialGradient(x,y,8,x,y,320);
+    rg.addColorStop(0,'rgba(255,255,255,.17)'); rg.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=rg; ctx.fillRect(0,0,W,H);
+    ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.font='700 46px sans-serif';
+    ctx.fillText(item?item.title:'演示画面',W/2,H/2-18);
+    ctx.font='16px sans-serif'; ctx.fillStyle='rgba(255,255,255,.75)';
+    ctx.fillText('演示画面 · 不是真实视频文件',W/2,H/2+22);
+    ctx.font='13px sans-serif'; ctx.fillStyle='rgba(255,255,255,.55)';
+    ctx.fillText(demoPaused?'已暂停 · 点击画面继续':'点击画面可暂停 / 继续',W/2,H/2+56);
+    ctx.fillStyle='rgba(255,255,255,.20)'; ctx.fillRect(70,H-62,W-140,5);
+    ctx.fillStyle='#e5a13a'; ctx.fillRect(70,H-62,(W-140)*t/DEMO_DUR,5);
+    ctx.textAlign='left'; ctx.fillStyle='rgba(255,255,255,.7)'; ctx.font='13px monospace';
+    ctx.fillText(fmtTime(t)+' / '+fmtTime(DEMO_DUR),70,H-38);
+    if(t>=DEMO_DUR){
+      stopDemo();
+      if(PLAY_ID) patch(PLAY_ID,{watched:true,progress:0}).then(()=>{refreshMeta();loadItems();}).catch(()=>{});
+      toast('演示播放结束，已标记为已看');
+      return;
+    }
+    if(!demoPaused) demoRAF=requestAnimationFrame(draw);
+  }
+  draw();
+}
 function openPlayer(id){
   const item = ITEMS.get(id) || CURRENT;
   PLAY_ID = id;
   const v = $('#video');
   $('#player-title').textContent = item ? item.title : '';
+  showOverlay(); $('#modal-player').classList.add('show');
+  if(OFFLINE){ demoPlayback(item); toast('演示画面：示例文件不是真实视频'); return; }
+  stopDemo();
+  v.style.display='';
   v.src = '/stream/'+id;
   v._seek = item ? item.progress : 0;
   lastSave = Date.now();
-  showOverlay(); $('#modal-player').classList.add('show');
   v.play().catch(()=>{});
 }
 $('#video').addEventListener('loadedmetadata', function(){
@@ -654,9 +906,12 @@ $('#video').addEventListener('ended', async ()=>{
   try{ await patch(PLAY_ID,{watched:true,progress:0}); refreshMeta(); loadItems(); }catch(e){}
 });
 $('#video').addEventListener('error', ()=>{
-  if(PLAY_ID) toast('浏览器不支持这个格式，点「系统播放器」用本机播放器打开');
+  if(!PLAY_ID || !$('#modal-player').classList.contains('show')) return;
+  demoPlayback(ITEMS.get(PLAY_ID) || CURRENT);
+  toast('这个文件浏览器播不了，已切换为演示画面；添加自己的影片即可真实播放');
 });
 async function openExternal(id){
+  if(OFFLINE){ demoHint(); return; }
   try{ await api('/api/open/'+id,{method:'POST',body:'{}'}); toast('已交给系统播放器'); }
   catch(err){ toast(err.message); }
 }
@@ -670,12 +925,14 @@ function renderRoots(roots){
       <button class="link-btn" data-remove="${esc(r)}">移除</button></div>`).join('')
     : '<div style="color:var(--muted);font-size:13px">还没有添加目录</div>';
   $('#root-list').querySelectorAll('[data-remove]').forEach(b => b.onclick = async ()=>{
+    if(OFFLINE){ demoHint(); return; }
     try{ const r = await api('/api/roots?path='+encodeURIComponent(b.dataset.remove),{method:'DELETE'});
       renderRoots(r.roots); toast('已移除，重新扫描后旧记录会标为丢失'); }
     catch(err){ toast(err.message); }
   });
 }
 $('#btn-root-add').onclick = async ()=>{
+  if(OFFLINE){ demoHint(); return; }
   const value = $('#root-input').value.trim();
   if(!value) return toast('请填文件夹路径');
   try{
@@ -697,6 +954,18 @@ $('#btn-dup').onclick = async ()=>{
   openModal('#modal-dup');
 };
 $('#btn-export').onclick = ()=>{
+  if(OFFLINE){
+    const head=['id','title','year','rating','tags','ext','resolution','size_human','path'];
+    const rows=[head].concat(DEMO.map(i=>[i.id,i.title,i.year??'',i.rating??'',
+      i.tags.join('|'),i.ext,i.resolution,i.size_human,i.path]));
+    const csv='\ufeff'+rows.map(r=>r.map(c=>'"'+String(c??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    const a=document.createElement('a'); a.href=url; a.download='my-shelf-demo.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    toast('已导出演示数据 CSV');
+    return;
+  }
   window.location.href = '/api/export?' + itemsQuery();
   toast('正在导出 CSV');
 };
@@ -714,6 +983,7 @@ function pollScan(){
   }).catch(()=>setTimeout(pollScan,3000));
 }
 $('#btn-scan').onclick = async ()=>{
+  if(OFFLINE){ demoHint(); return; }
   try{ const r = await api('/api/scan',{method:'POST',body:'{}'});
     toast(r.started?'开始扫描':'扫描正在进行中'); }
   catch(err){ toast(err.message); }
@@ -758,7 +1028,9 @@ function showOverlay(){ $('#veil').classList.add('show'); }
 function closeAll(){
   $('#veil').classList.remove('show');
   document.querySelectorAll('.modal,.drawer').forEach(el=>el.classList.remove('show'));
-  const v=$('#video'); if(v && !$('#modal-player').classList.contains('show')){ v.pause(); v.removeAttribute('src'); v.load(); PLAY_ID=null; }
+  stopDemo();
+  const v=$('#video'); if(v){ v.pause(); v.removeAttribute('src'); v.load(); }
+  PLAY_ID=null;
 }
 function openModal(sel){ showOverlay(); $(sel).classList.add('show'); }
 $('#veil').onclick = closeAll;
@@ -789,8 +1061,12 @@ $('#btn-theme').onclick = ()=>{
 $('#view-grid').classList.toggle('on',state.view==='grid');
 $('#view-list').classList.toggle('on',state.view==='list');
 $('#f-pagesize').value = String(state.pageSize);
-refreshAll();
-pollScan();
+(async function boot(){
+  await detectBackend();
+  if(OFFLINE) showDemoBanner();
+  refreshAll();
+  if(!OFFLINE) pollScan();
+})();
 </script>
 </body>
 </html>
